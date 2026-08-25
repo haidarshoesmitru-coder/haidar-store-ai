@@ -1,0 +1,516 @@
+// Haidar Store AI — Prisma Schema
+//
+// SPRINT 1 SCOPE NOTE:
+// This file intentionally contains ONLY the models the foundation needs:
+// Role and User, which back the authentication/RBAC foundation.
+// The full schema (Category, Product, ProductVariant, Order, AIConversation,
+// etc.) was finalized in the database design phase and will be added
+// incrementally, one feature module at a time, in the sprints that build
+// those features — adding them now would violate this sprint's stated scope
+// and produce migrations with no code using them yet.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// Roles are rows, not a hardcoded enum — this is a deliberate carry-over
+/// from the DB design: adding "delivery_staff" or any future role later is
+/// an INSERT, not a migration. `level` is the ordinal used by the RBAC
+/// helper (server/auth/rbac.ts) to answer "does role X have at least the
+/// access of role Y" without hardcoding role names into every check.
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  level       Int      @unique
+  users       User[]
+  createdAt   DateTime @default(now())
+
+  @@map("roles")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+/// Staff accounts. Customer accounts are a separate model added in the
+/// Customers module (per the DB design, Customer and User are distinct
+/// entities — a shopper is not a "user" with a role).
+model User {
+  id           String     @id @default(uuid())
+  roleId       String     @map("role_id")
+  role         Role       @relation(fields: [roleId], references: [id])
+  name         String
+  email        String     @unique
+  phone        String?
+  passwordHash String     @map("password_hash")
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  /// Back-reference required by Prisma for the InventoryTransaction relation
+  /// added in Sprint 2.1 (Catalog module, below). Not a functional change to
+  /// this model — Prisma requires both sides of a relation to be declared.
+  inventoryTransactions InventoryTransaction[]
+  /// Same reasoning as above, for the OrderStatusHistory relation added in
+  /// the Orders module (Sprint 3.1, below).
+  orderStatusChanges    OrderStatusHistory[]
+
+  @@index([roleId])
+  @@map("users")
+}
+
+// ============================================================================
+// SPRINT 2.1 — CATALOG & PRODUCT MANAGEMENT FOUNDATION
+// ============================================================================
+//
+// Everything below this line is new in Sprint 2.1. Role/User above are
+// untouched from Sprint 1.
+//
+// Naming note: this module uses Category / SubCategory / ProductVariant /
+// VariantAttribute / Inventory / InventoryTransaction / LowStockConfiguration
+// as named in the Sprint 2.1 spec. One supporting model, `Attribute`, is
+// added beyond that named list — see the entity-relationships document for
+// why it's necessary rather than optional (in short: without a definitions
+// table, "VariantAttribute" would have nowhere to source its attribute
+// names from except a hardcoded list, which the spec explicitly rules out).
+//
+// Pricing lives on ProductVariant, not Product — carried forward from the
+// database design phase: every Product has at least one variant (its
+// `isDefault` variant) even when it has no real size/color variation, so
+// price/SKU/barcode/stock have exactly one home regardless of category.
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum ProductSeason {
+  WINTER
+  SUMMER
+  ALL_SEASON
+}
+
+enum VariantStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AttributeDataType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  SELECT
+}
+
+enum InventoryTransactionType {
+  STOCK_IN
+  STOCK_OUT
+  SALE
+  RETURN
+  ADJUSTMENT
+}
+
+/// Top-level catalog grouping — Shoes, Jewellery, Makeup, General Store today,
+/// more later purely as new rows. Self-contained (no parent) by design:
+/// two-level depth (Category -> SubCategory) is what the spec asks for, not
+/// arbitrary nesting — arbitrary depth was a decision made for the general
+/// database design phase, but this sprint's explicit SubCategory model
+/// supersedes that for the Catalog module specifically.
+model Category {
+  id            String        @id @default(uuid())
+  name          String
+  slug          String        @unique
+  description   String?
+  sortOrder     Int           @default(0) @map("sort_order")
+  isActive      Boolean       @default(true) @map("is_active")
+  subCategories SubCategory[]
+  products      Product[]
+  deletedAt     DateTime?     @map("deleted_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  @@index([isActive])
+  @@map("categories")
+}
+
+/// Belongs to exactly one Category. Optional on Product — not every store
+/// section needs subdivision (e.g. a small General Store category may not
+/// need subcategories on day one), so Product.subCategoryId is nullable
+/// while Product.categoryId is required.
+model SubCategory {
+  id         String    @id @default(uuid())
+  categoryId String    @map("category_id")
+  category   Category  @relation(fields: [categoryId], references: [id])
+  name       String
+  slug       String
+  sortOrder  Int       @default(0) @map("sort_order")
+  isActive   Boolean   @default(true) @map("is_active")
+  products   Product[]
+  deletedAt  DateTime? @map("deleted_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@unique([categoryId, slug])
+  @@index([categoryId])
+  @@map("sub_categories")
+}
+
+model Brand {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  logoUrl   String?   @map("logo_url")
+  isActive  Boolean   @default(true) @map("is_active")
+  products  Product[]
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@map("brands")
+}
+
+/// The catalog "concept" — e.g. "Men's Running Shoe X100". Deliberately
+/// carries NO price/SKU/barcode/stock — those live on ProductVariant so a
+/// single-variant makeup item and a multi-variant shoe use the same shape.
+model Product {
+  id            String        @id @default(uuid())
+  categoryId    String        @map("category_id")
+  category      Category      @relation(fields: [categoryId], references: [id])
+  subCategoryId String?       @map("sub_category_id")
+  subCategory   SubCategory?  @relation(fields: [subCategoryId], references: [id])
+  brandId       String?       @map("brand_id")
+  brand         Brand?        @relation(fields: [brandId], references: [id])
+  name          String
+  slug          String        @unique
+  description   String?
+  status        ProductStatus @default(DRAFT)
+  season        ProductSeason?
+  isFeatured    Boolean       @default(false) @map("is_featured")
+  isBestSeller  Boolean       @default(false) @map("is_best_seller")
+  isNewArrival  Boolean       @default(false) @map("is_new_arrival")
+  images        ProductImage[]
+  variants      ProductVariant[]
+  deletedAt     DateTime?     @map("deleted_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  @@index([categoryId])
+  @@index([subCategoryId])
+  @@index([brandId])
+  @@index([status])
+  @@map("products")
+}
+
+model ProductImage {
+  id        String          @id @default(uuid())
+  productId String          @map("product_id")
+  product   Product         @relation(fields: [productId], references: [id])
+  variantId String?         @map("variant_id")
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+  url       String
+  altText   String?         @map("alt_text")
+  sortOrder Int             @default(0) @map("sort_order")
+  isPrimary Boolean         @default(false) @map("is_primary")
+  createdAt DateTime        @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([variantId])
+  @@map("product_images")
+}
+
+/// The sellable unit. Every Product has at least one Variant (its
+/// `isDefault` one), even a plain lipstick with no real size/color
+/// variation — this keeps price/stock/SKU in exactly one place regardless
+/// of how many real variants a given product has.
+model ProductVariant {
+  id               String            @id @default(uuid())
+  productId        String            @map("product_id")
+  product          Product           @relation(fields: [productId], references: [id])
+  sku              String?           @unique
+  barcode          String?           @unique
+  price            Decimal           @db.Decimal(12, 2)
+  compareAtPrice   Decimal?          @map("compare_at_price") @db.Decimal(12, 2)
+  costPrice        Decimal?          @map("cost_price") @db.Decimal(12, 2)
+  status           VariantStatus     @default(ACTIVE)
+  isDefault        Boolean           @default(false) @map("is_default")
+  images           ProductImage[]
+  attributes       VariantAttribute[]
+  inventory        Inventory?
+  lowStockConfig   LowStockConfiguration?
+  orderItems       OrderItem[]
+  deletedAt        DateTime?         @map("deleted_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  @@index([productId])
+  @@map("product_variants")
+}
+
+/// Definition of a characteristic ("Size", "Shade", "Weight", "Pack Size"...).
+/// Supporting model beyond the spec's named list — see the note at the top
+/// of this section for why it's necessary, not extra.
+model Attribute {
+  id         String             @id @default(uuid())
+  name       String
+  code       String             @unique
+  dataType   AttributeDataType  @default(TEXT) @map("data_type")
+  variantAttributes VariantAttribute[]
+  createdAt  DateTime           @default(now()) @map("created_at")
+
+  @@map("attributes")
+}
+
+/// The assignment: this ProductVariant has Attribute X = value. `value` is
+/// plain text regardless of `Attribute.dataType` — foundation scope
+/// deliberately does not add a separate predefined-options table
+/// (AttributeValue/dropdown enforcement); see entity-relationships doc.
+model VariantAttribute {
+  id          String         @id @default(uuid())
+  variantId   String         @map("variant_id")
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+  attributeId String         @map("attribute_id")
+  attribute   Attribute      @relation(fields: [attributeId], references: [id])
+  value       String
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  @@unique([variantId, attributeId])
+  @@index([attributeId])
+  @@map("variant_attributes")
+}
+
+/// Current stock snapshot — one row per variant. Kept as a cached value
+/// (not derived via SUM() over InventoryTransaction on every read) for
+/// product-page read performance; every write to it happens transactionally
+/// alongside an InventoryTransaction insert, never independently.
+model Inventory {
+  id                String              @id @default(uuid())
+  variantId         String              @unique @map("variant_id")
+  variant           ProductVariant      @relation(fields: [variantId], references: [id])
+  quantityOnHand    Int                 @default(0) @map("quantity_on_hand")
+  quantityReserved  Int                 @default(0) @map("quantity_reserved")
+  transactions      InventoryTransaction[]
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  @@map("inventory")
+}
+
+/// Append-only ledger — the audit trail behind Inventory.quantityOnHand.
+/// No `updatedAt`, no soft delete: a transaction is never edited or hidden,
+/// only ever inserted. Correcting a mistake means writing a new ADJUSTMENT
+/// row, not editing history.
+model InventoryTransaction {
+  id              String                    @id @default(uuid())
+  inventoryId     String                    @map("inventory_id")
+  inventory       Inventory                 @relation(fields: [inventoryId], references: [id])
+  type            InventoryTransactionType
+  quantity        Int
+  note            String?
+  referenceType   String?                   @map("reference_type")
+  referenceId     String?                   @map("reference_id")
+  performedByUserId String?                 @map("performed_by_user_id")
+  performedByUser User?                     @relation(fields: [performedByUserId], references: [id])
+  createdAt       DateTime                  @default(now()) @map("created_at")
+
+  @@index([inventoryId, createdAt])
+  @@map("inventory_transactions")
+}
+
+/// Threshold configuration, kept separate from Inventory (state) on
+/// purpose: this is config that changes rarely (a manager decides "alert me
+/// under 5 units"), while Inventory.quantityOnHand changes on every sale —
+/// separating config from fast-changing state is why this is its own table
+/// rather than a column on Inventory.
+model LowStockConfiguration {
+  id        String         @id @default(uuid())
+  variantId String         @unique @map("variant_id")
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+  threshold Int
+  isEnabled Boolean        @default(true) @map("is_enabled")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  @@map("low_stock_configurations")
+}
+
+// ============================================================================
+// ORDERS MODULE (Sprint 3.1)
+// ============================================================================
+//
+// SCOPE NOTE: the business today is pickup-only (no delivery). Rather than
+// hardcoding that assumption, fulfillment is modeled as an explicit,
+// extensible dimension from day one — the same pattern already used for
+// Role (table, not enum) and Order.source (enum, but present from the
+// start even though only "website" existed at the time). This means
+// turning delivery on later is a business-logic and UI change, not a
+// schema migration: CustomerAddress and Order.deliveryAddressId already
+// exist and simply go unused until delivery ships.
+//
+// Per the DB design doc: Order/OrderItem/OrderStatusHistory in 3NF,
+// Customer/CustomerAddress as first-class entities distinct from User
+// (a shopper is never a staff "User" with a Role), guest orders supported
+// via nullable customerId + denormalized guest_* fields, and price/name
+// snapshotted onto OrderItem at time of purchase (an order must always
+// show what it looked like when it was placed, even if the product is
+// later renamed, repriced, or deleted).
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}
+
+/// Where the order came from. "website" is the only channel with a UI
+/// today; "whatsapp" and "admin" are already modeled so the WhatsApp AI
+/// channel (next phase) and manual staff-created orders need no schema
+/// change to plug in.
+enum OrderSource {
+  WEBSITE
+  WHATSAPP
+  ADMIN
+}
+
+/// How the order will reach the customer. Only PICKUP is usable today —
+/// there is no delivery UI, no rider assignment, no shipping-cost logic.
+/// DELIVERY exists in the enum now so that turning it on later is additive
+/// (new service logic + UI) rather than a migration that touches every
+/// existing Order row.
+enum FulfillmentType {
+  PICKUP
+  DELIVERY
+}
+
+/// Why a CANCELLED order was cancelled. Distinguishing NO_SHOW from every
+/// other reason is what makes the no-show protection policy (Order
+/// service, below) possible without guessing at intent from a bare
+/// status — "customer never came for a confirmed pickup" and "customer
+/// called and cancelled" must never be conflated.
+enum CancellationReason {
+  CUSTOMER_REQUEST
+  NO_SHOW
+  OUT_OF_STOCK
+  STAFF_ERROR
+  OTHER
+}
+
+/// A shopper. Deliberately separate from User (User = staff/admin with a
+/// Role). A Customer may have placed zero orders (created on first
+/// WhatsApp contact) or many; phone/email/whatsappId are independently
+/// nullable + unique since a WhatsApp-only customer may never give an
+/// email, and a web customer may never give a WhatsApp id.
+model Customer {
+  id          String            @id @default(uuid())
+  name        String?
+  phone       String?           @unique
+  email       String?           @unique
+  whatsappId  String?           @unique @map("whatsapp_id")
+  addresses   CustomerAddress[]
+  orders      Order[]
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  @@map("customers")
+}
+
+/// Saved addresses. Not used by any order yet (pickup-only today) — exists
+/// now so that when delivery ships, a returning customer already has a
+/// place to store "Home" / "Work" instead of retyping it every order.
+model CustomerAddress {
+  id           String    @id @default(uuid())
+  customerId   String    @map("customer_id")
+  customer     Customer  @relation(fields: [customerId], references: [id])
+  label        String?
+  addressLine  String    @map("address_line")
+  city         String
+  isDefault    Boolean   @default(false) @map("is_default")
+  deliveryOrders Order[] @relation("OrderDeliveryAddress")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+/// The order header. `total` etc. are validated/computed at the service
+/// layer at write time (multi-row rounding logic belongs in application
+/// code, not a DB constraint) — same approach as Inventory writes always
+/// going through one service path.
+model Order {
+  id                 String           @id @default(uuid())
+  orderNumber        String           @unique @map("order_number")
+  customerId         String?          @map("customer_id")
+  customer           Customer?        @relation(fields: [customerId], references: [id])
+  guestName          String?          @map("guest_name")
+  guestPhone         String?          @map("guest_phone")
+  guestAddress       String?          @map("guest_address")
+  status             OrderStatus      @default(PENDING)
+  source             OrderSource
+  fulfillmentType    FulfillmentType  @default(PICKUP) @map("fulfillment_type")
+  /// Only ever set when status = CANCELLED. Drives the no-show
+  /// protection policy (see Order service) — a customer's block status
+  /// is COMPUTED from a count of NO_SHOW-cancelled orders, never stored
+  /// as a separate denormalized counter, so it's always consistent with
+  /// the order history it's derived from.
+  cancellationReason CancellationReason? @map("cancellation_reason")
+  deliveryAddressId  String?          @map("delivery_address_id")
+  deliveryAddress    CustomerAddress? @relation("OrderDeliveryAddress", fields: [deliveryAddressId], references: [id])
+  subtotal           Decimal          @db.Decimal(12, 2)
+  discount           Decimal          @default(0) @db.Decimal(12, 2)
+  tax                Decimal          @default(0) @db.Decimal(12, 2)
+  total              Decimal          @db.Decimal(12, 2)
+  currency           String           @default("PKR")
+  items              OrderItem[]
+  statusHistory      OrderStatusHistory[]
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+/// Line items. Name/SKU/price are SNAPSHOTTED here on purpose — an order
+/// must permanently show what the customer actually bought at the price
+/// they actually paid, even if the product is later renamed, repriced,
+/// or removed from the catalog entirely.
+model OrderItem {
+  id                   String         @id @default(uuid())
+  orderId              String         @map("order_id")
+  order                Order          @relation(fields: [orderId], references: [id])
+  variantId            String         @map("variant_id")
+  variant              ProductVariant @relation(fields: [variantId], references: [id])
+  productNameSnapshot  String         @map("product_name_snapshot")
+  skuSnapshot          String?        @map("sku_snapshot")
+  unitPrice            Decimal        @map("unit_price") @db.Decimal(12, 2)
+  quantity             Int
+  lineTotal            Decimal        @map("line_total") @db.Decimal(12, 2)
+  createdAt            DateTime       @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+/// Append-only ledger of status changes — same pattern as
+/// InventoryTransaction: history is never edited, only ever inserted.
+model OrderStatusHistory {
+  id            String      @id @default(uuid())
+  orderId       String      @map("order_id")
+  order         Order       @relation(fields: [orderId], references: [id])
+  status        OrderStatus
+  changedByUserId String?   @map("changed_by_user_id")
+  changedByUser User?       @relation(fields: [changedByUserId], references: [id])
+  note          String?
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@index([orderId, createdAt])
+  @@map("order_status_history")
+}
