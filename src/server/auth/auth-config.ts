@@ -1,6 +1,5 @@
 import type { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
-import { PrismaAdapter } from '@auth/prisma-adapter';
 import { db } from '@/shared/lib/db';
 import { env } from '@/shared/config/env';
 import { AuthService } from '@/features/auth/services/auth.service';
@@ -16,14 +15,19 @@ import { logger } from '@/shared/lib/logger';
  * to NextAuth directly except the route handler that mounts it and
  * session.ts (below), which reads the result.
  *
- * Database sessions (not JWT) per the architecture decision: simpler
- * revocation (delete the session row, the user is logged out immediately
- * — a JWT would stay valid until expiry regardless), and this app has a
- * single backend, so JWT's main advantage (stateless verification across
- * multiple services) doesn't apply.
+ * JWT sessions, not database — NextAuth's CredentialsProvider only
+ * supports the `jwt` strategy (`database` strategy requires an adapter to
+ * persist a session row keyed off a provider-created Account, which
+ * Credentials intentionally never creates — there's no OAuth account to
+ * link). This was originally written as `database` for simpler
+ * revocation, but that combination doesn't actually work with
+ * CredentialsProvider at all (NextAuth throws
+ * UnsupportedStrategyError at request time) — not a style choice to
+ * revisit later, a hard framework constraint. No PrismaAdapter either,
+ * for the same reason: it exists to persist OAuth accounts/sessions,
+ * neither of which this Credentials-only setup has.
  *
- * Dependencies: next-auth, @auth/prisma-adapter, db.ts, env.ts,
- * AuthService, validation.
+ * Dependencies: next-auth, db.ts, env.ts, AuthService, validation.
  * Future usage: mounted by the NextAuth route handler
  * (app/api/auth/[...nextauth]/route.ts) and read by session.ts.
  */
@@ -31,9 +35,8 @@ import { logger } from '@/shared/lib/logger';
 const authService = new AuthService();
 
 export const authConfig: NextAuthOptions = {
-  adapter: PrismaAdapter(db),
   session: {
-    strategy: 'database',
+    strategy: 'jwt',
     maxAge: 30 * 24 * 60 * 60, // 30 days for customer-facing sessions
     updateAge: 24 * 60 * 60,
   },
@@ -63,7 +66,8 @@ export const authConfig: NextAuthOptions = {
 
         logger.info('User authenticated', { userId: user.id });
 
-        // Shape returned here becomes `user` in the `session` callback below.
+        // Shape returned here becomes `user` in the `jwt` callback below,
+        // on sign-in only (not on subsequent token refreshes).
         return {
           id: user.id,
           name: user.name,
@@ -76,13 +80,35 @@ export const authConfig: NextAuthOptions = {
   ],
   callbacks: {
     /**
-     * Attaches role info onto the session object NextAuth returns to the
-     * server — this is what lets `getCurrentUser()` (session.ts) return a
-     * fully-typed AuthUser without an extra DB round trip on every request.
+     * Runs on sign-in (with `user` populated from `authorize` above) and
+     * on every subsequent request that reads the session (with `user`
+     * undefined) — role info is persisted into the JWT itself at
+     * sign-in, so later calls don't need a DB round trip just to read
+     * role/level.
      */
-    async session({ session, user }) {
+    async jwt({ token, user }) {
+      if (user) {
+        token.userId = user.id;
+        token.roleName = user.roleName;
+        token.roleLevel = user.roleLevel;
+      }
+      return token;
+    },
+
+    /**
+     * Attaches role info from the JWT onto the session object the server
+     * sees — this is what lets `getCurrentUser()` (session.ts) return a
+     * fully-typed AuthUser. A fresh DB read (rather than trusting the
+     * token's role fields verbatim) so a role change takes effect on the
+     * user's very next request instead of waiting up to `updateAge` for
+     * the token to refresh — the DB round trip the JWT approach was
+     * meant to avoid is deliberately paid back here, once per session
+     * read, specifically for role/level, since a stale permission level
+     * is a correctness issue in a way a stale name/email is not.
+     */
+    async session({ session, token }) {
       const dbUser = await db.user.findUnique({
-        where: { id: user.id },
+        where: { id: token.userId as string },
         include: { role: true },
       });
 

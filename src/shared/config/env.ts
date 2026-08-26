@@ -49,4 +49,32 @@ function loadEnv(): Env {
   return parsed.data;
 }
 
-export const env = loadEnv();
+/**
+ * Next.js requires app/error.tsx to be a Client Component, and it imports
+ * logger.ts (for `logger.error` on render failures) which imports this
+ * module — so this file ends up in the client bundle whether or not any
+ * client code actually needs it. On the client, `process.env` only ever
+ * exposes `NEXT_PUBLIC_*` vars, so validating the full schema (which
+ * requires DATABASE_URL, NEXTAUTH_SECRET, etc.) would throw on every page
+ * load before any real error even occurred.
+ *
+ * The fix is `typeof window === 'undefined'` as the server/client split:
+ * on the server, validate for real and fail loudly on misconfiguration
+ * (the original intent, preserved exactly). On the client, skip
+ * validation and return safe defaults — client code reading this module
+ * only ever needs LOG_LEVEL (via logger.ts); it must never need
+ * DATABASE_URL or NEXTAUTH_SECRET, and if some future client code tried
+ * to, that would be its own bug to catch in review, not something this
+ * module should paper over by inventing fake secret values.
+ */
+const CLIENT_SAFE_DEFAULTS: Env = {
+  NODE_ENV: (process.env.NODE_ENV as Env['NODE_ENV']) ?? 'development',
+  DATABASE_URL: '',
+  DIRECT_URL: '',
+  NEXTAUTH_URL: '',
+  NEXTAUTH_SECRET: '',
+  ALLOWED_ORIGINS: '',
+  LOG_LEVEL: 'info',
+};
+
+export const env: Env = typeof window === 'undefined' ? loadEnv() : CLIENT_SAFE_DEFAULTS;

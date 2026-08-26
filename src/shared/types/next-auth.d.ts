@@ -1,4 +1,5 @@
 import type { DefaultSession } from 'next-auth';
+import type { JWT as DefaultJWT } from 'next-auth/jwt';
 
 /**
  * Why this file exists: NextAuth's built-in `Session.user` type only has
@@ -9,9 +10,15 @@ import type { DefaultSession } from 'next-auth';
  * `any` or fail to compile — exactly the kind of gap strict mode exists to
  * catch, so it needs to be closed explicitly.
  *
- * Dependencies: next-auth (type-only).
- * Future usage: read implicitly by every file that imports a `Session`
- * type — rbac.ts and session.ts most directly.
+ * The `next-auth/jwt` augmentation below exists for the same reason, one
+ * layer earlier: the `jwt` callback (auth-config.ts) writes
+ * userId/roleName/roleLevel onto the token at sign-in, and the `session`
+ * callback reads `token.userId` back out — both sides need this
+ * declared, or that read is `any`.
+ *
+ * Dependencies: next-auth, next-auth/jwt (both type-only).
+ * Future usage: read implicitly by every file that imports a `Session` or
+ * `JWT` type — rbac.ts and session.ts most directly.
  */
 declare module 'next-auth' {
   interface Session {
@@ -20,5 +27,13 @@ declare module 'next-auth' {
       roleName: string;
       roleLevel: number;
     } & DefaultSession['user'];
+  }
+}
+
+declare module 'next-auth/jwt' {
+  interface JWT extends DefaultJWT {
+    userId?: string;
+    roleName?: string;
+    roleLevel?: number;
   }
 }
