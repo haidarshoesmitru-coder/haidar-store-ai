@@ -4,9 +4,10 @@ import { useState, type FormEvent } from 'react';
 import { Button } from '@/shared/ui/Button';
 import { Input } from '@/shared/ui/Input';
 import { Textarea } from '@/features/catalog-admin/components/FormFields';
-import { createCategorySchema } from '@/features/catalog';
+import { createCategorySchema } from '@/features/catalog/client';
 import { ApiError } from '@/features/catalog-admin/api-client';
-import type { CreateCategoryDto } from '@/features/catalog';
+import { useAutoSlug } from '@/features/catalog-admin/hooks/useAutoSlug';
+import type { CreateCategoryDto } from '@/features/catalog/client';
 
 /**
  * Why this file exists: the create/edit Category form. Validates
@@ -26,7 +27,7 @@ interface CategoryFormProps {
 
 export function CategoryForm({ initialValues, onSubmit, onCancel }: CategoryFormProps) {
   const [name, setName] = useState(initialValues?.name ?? '');
-  const [slug, setSlug] = useState(initialValues?.slug ?? '');
+  const [slug, setSlug] = useAutoSlug(name, initialValues?.slug ?? '');
   const [description, setDescription] = useState(initialValues?.description ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);

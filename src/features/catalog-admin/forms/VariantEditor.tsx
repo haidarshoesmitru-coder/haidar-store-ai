@@ -7,7 +7,7 @@ import { Select } from '@/features/catalog-admin/components/FormFields';
 import { ConfirmDialog } from '@/features/catalog-admin/components/ConfirmDialog';
 import { useAttributes } from '@/features/catalog-admin/hooks/useAttributes';
 import { ApiError } from '@/features/catalog-admin/api-client';
-import type { VariantResponseDto, CreateVariantDto } from '@/features/catalog';
+import type { VariantResponseDto, CreateVariantDto } from '@/features/catalog/client';
 
 /**
  * Why this file exists: variant CRUD on the product edit page — list

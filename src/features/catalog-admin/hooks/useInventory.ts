@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiClient, ApiError } from '@/features/catalog-admin/api-client';
-import type { InventoryResponseDto, InventoryTransactionResponseDto } from '@/features/catalog';
+import type { InventoryResponseDto, InventoryTransactionResponseDto } from '@/features/catalog/client';
 
 /**
  * Why this file exists: the Inventory dashboard's data layer — low-stock

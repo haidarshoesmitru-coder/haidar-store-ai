@@ -8,7 +8,7 @@ import { ConfirmDialog } from '@/features/catalog-admin/components/ConfirmDialog
 import { CategoryForm } from '@/features/catalog-admin/forms/CategoryForm';
 import { useCategories } from '@/features/catalog-admin/hooks/useCategories';
 import { ApiError } from '@/features/catalog-admin/api-client';
-import type { CategoryWithSubCategoriesResponseDto } from '@/features/catalog';
+import type { CategoryWithSubCategoriesResponseDto } from '@/features/catalog/client';
 
 /** Categories admin page — list, create, edit, delete, all against the real /api/v1/categories endpoints. */
 export default function CategoriesPage() {

@@ -3,9 +3,10 @@
 import { useState, type FormEvent } from 'react';
 import { Button } from '@/shared/ui/Button';
 import { Input } from '@/shared/ui/Input';
-import { createBrandSchema } from '@/features/catalog';
+import { createBrandSchema } from '@/features/catalog/client';
 import { ApiError } from '@/features/catalog-admin/api-client';
-import type { CreateBrandDto } from '@/features/catalog';
+import { useAutoSlug } from '@/features/catalog-admin/hooks/useAutoSlug';
+import type { CreateBrandDto } from '@/features/catalog/client';
 
 /** Same pattern as CategoryForm.tsx — see there for the shared rationale. */
 
@@ -17,7 +18,7 @@ interface BrandFormProps {
 
 export function BrandForm({ initialValues, onSubmit, onCancel }: BrandFormProps) {
   const [name, setName] = useState(initialValues?.name ?? '');
-  const [slug, setSlug] = useState(initialValues?.slug ?? '');
+  const [slug, setSlug] = useAutoSlug(name, initialValues?.slug ?? '');
   const [logoUrl, setLogoUrl] = useState(initialValues?.logoUrl ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);

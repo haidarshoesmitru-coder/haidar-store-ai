@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiClient, ApiError } from '@/features/catalog-admin/api-client';
-import type { BrandResponseDto, CreateBrandDto, UpdateBrandDto } from '@/features/catalog';
+import type { BrandResponseDto, CreateBrandDto, UpdateBrandDto } from '@/features/catalog/client';
 
 /** Same pattern as useCategories.ts — see there for the shared rationale. */
 export function useBrands() {

@@ -7,9 +7,10 @@ import { Select, Textarea } from '@/features/catalog-admin/components/FormFields
 import { useCategories } from '@/features/catalog-admin/hooks/useCategories';
 import { useBrands } from '@/features/catalog-admin/hooks/useBrands';
 import { useAttributes } from '@/features/catalog-admin/hooks/useAttributes';
-import { createProductSchema } from '@/features/catalog';
+import { useAutoSlug } from '@/features/catalog-admin/hooks/useAutoSlug';
+import { createProductSchema } from '@/features/catalog/client';
 import { ApiError } from '@/features/catalog-admin/api-client';
-import type { CreateProductDto } from '@/features/catalog';
+import type { CreateProductDto } from '@/features/catalog/client';
 
 /**
  * Why this file exists: the "New Product" form. Collects the product's
@@ -66,7 +67,7 @@ export function ProductForm({ onSubmit, onCancel }: ProductFormProps) {
   const { attributes, createAttribute } = useAttributes();
 
   const [name, setName] = useState('');
-  const [slug, setSlug] = useState('');
+  const [slug, setSlug] = useAutoSlug(name);
   const [description, setDescription] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [subCategoryId, setSubCategoryId] = useState('');

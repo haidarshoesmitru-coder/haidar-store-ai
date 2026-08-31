@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/shared/ui/Button';
 import { Input } from '@/shared/ui/Input';
-import type { ProductImageDto } from '@/features/catalog';
+import type { ProductImageDto } from '@/features/catalog/client';
 
 /**
  * Why this file exists: multi-image management for a product — preview,

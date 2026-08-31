@@ -8,7 +8,7 @@ import { ConfirmDialog } from '@/features/catalog-admin/components/ConfirmDialog
 import { BrandForm } from '@/features/catalog-admin/forms/BrandForm';
 import { useBrands } from '@/features/catalog-admin/hooks/useBrands';
 import { ApiError } from '@/features/catalog-admin/api-client';
-import type { BrandResponseDto } from '@/features/catalog';
+import type { BrandResponseDto } from '@/features/catalog/client';
 
 /** Brands admin page — same pattern as categories/page.tsx. */
 export default function BrandsPage() {

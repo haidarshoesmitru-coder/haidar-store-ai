@@ -9,7 +9,7 @@ import type {
   CreateVariantDto,
   UpdateVariantDto,
   VariantWithCostResponseDto,
-} from '@/features/catalog';
+} from '@/features/catalog/client';
 
 /**
  * Why this file exists: the single-product admin page's data layer —

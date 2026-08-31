@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiClient, ApiError } from '@/features/catalog-admin/api-client';
-import type { CategoryWithSubCategoriesResponseDto, CreateCategoryDto, UpdateCategoryDto } from '@/features/catalog';
+import type { CategoryWithSubCategoriesResponseDto, CreateCategoryDto, UpdateCategoryDto } from '@/features/catalog/client';
 
 /**
  * Why this file exists: the Categories admin page's data layer — list,

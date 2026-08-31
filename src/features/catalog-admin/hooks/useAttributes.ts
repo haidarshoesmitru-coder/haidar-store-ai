@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiClient, ApiError } from '@/features/catalog-admin/api-client';
-import type { CreateAttributeInput } from '@/features/catalog';
+import type { CreateAttributeInput } from '@/features/catalog/client';
 
 export interface AttributeDto {
   id: string;

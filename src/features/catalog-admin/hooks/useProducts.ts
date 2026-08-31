@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient, ApiError } from '@/features/catalog-admin/api-client';
-import type { ProductListRowDto } from '@/features/catalog';
+import type { ProductListRowDto } from '@/features/catalog/client';
 
 export interface ProductFilters {
   q?: string;

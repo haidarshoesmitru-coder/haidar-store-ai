@@ -12,7 +12,7 @@ import { useProducts, type ProductFilters } from '@/features/catalog-admin/hooks
 import { useDebouncedValue } from '@/features/catalog-admin/hooks/useDebouncedValue';
 import { useCategories } from '@/features/catalog-admin/hooks/useCategories';
 import { useBrands } from '@/features/catalog-admin/hooks/useBrands';
-import type { ProductListRowDto } from '@/features/catalog';
+import type { ProductListRowDto } from '@/features/catalog/client';
 
 /**
  * Why this file exists: the Products list page — search, filter
