@@ -102,7 +102,7 @@ export default function ProductDetailPage({ params }: { params: { id: string } }
 
       <Card>
         <h2 className="mb-4 text-lg font-semibold text-ink">Images</h2>
-        <ImageManager images={product.images} onAdd={addImage} onRemove={removeImage} />
+        <ImageManager productId={product.id} images={product.images} onAdd={addImage} onRemove={removeImage} />
       </Card>
 
       <Card>

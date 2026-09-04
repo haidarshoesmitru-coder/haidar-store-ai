@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button } from '@/shared/ui/Button';
 import { Input } from '@/shared/ui/Input';
+import { ApiError } from '@/features/catalog-admin/api-client';
 import type { ProductImageDto } from '@/features/catalog/client';
 
 /**
@@ -10,13 +11,14 @@ import type { ProductImageDto } from '@/features/catalog/client';
  * add, remove, set featured, reorder — built against the real
  * `/api/v1/products/:id/images` endpoints added this sprint.
  *
- * No file-upload widget: no object storage (S3/R2) was ever set up in
- * any prior sprint, and `ProductImage.url` (Sprint 2.1) is just a string
- * — so images are added by URL (an admin pastes a link to an
- * already-hosted image). This is the "placeholder storage integration"
- * this sprint's task explicitly permits, chosen because it's honest: it
- * produces real, persisted, non-mock `ProductImage` rows through the real
- * API, rather than a file picker with nowhere real to send bytes.
+ * Upload now works: a file picker sends bytes to
+ * `/api/v1/products/:id/images/upload` (Vercel Blob storage), gets a
+ * real hosted URL back, then calls the same `onAdd(url, ...)` the
+ * URL-paste field already used — one image-creation code path for both
+ * "pasted link" and "uploaded file," not two. Both options stay
+ * available: a URL field for images already hosted elsewhere (a CDN, a
+ * supplier's product photo page), and this upload button for a photo
+ * taken on a phone with nowhere else to host it.
  *
  * Reorder/set-featured are implemented as remove-then-re-add — the only
  * two operations the API actually exposes (there's no PATCH-image
@@ -32,17 +34,52 @@ import type { ProductImageDto } from '@/features/catalog/client';
  */
 
 interface ImageManagerProps {
+  productId: string;
   images: ProductImageDto[];
   onAdd: (url: string, isPrimary: boolean, sortOrder: number) => Promise<void>;
   onRemove: (imageId: string) => Promise<void>;
 }
 
-export function ImageManager({ images, onAdd, onRemove }: ImageManagerProps) {
+export function ImageManager({ productId, images, onAdd, onRemove }: ImageManagerProps) {
   const [newUrl, setNewUrl] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const sorted = [...images].sort((a, b) => a.sortOrder - b.sortOrder);
+
+  async function uploadFile(file: File): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`/api/v1/products/${productId}/images/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    const body = await response.json();
+
+    if (!response.ok) {
+      throw new ApiError(body.error ?? 'Upload failed.', body.code ?? 'INTERNAL_ERROR', response.status, body.details ?? null);
+    }
+
+    return body.data.url as string;
+  }
+
+  async function handleFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setIsBusy(true);
+    setError(null);
+    try {
+      const url = await uploadFile(file);
+      await onAdd(url, images.length === 0, images.length);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload image.');
+    } finally {
+      setIsBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
 
   async function rewriteAll(next: { url: string; altText: string | null; isPrimary: boolean }[]) {
     setIsBusy(true);
@@ -112,12 +149,28 @@ export function ImageManager({ images, onAdd, onRemove }: ImageManagerProps) {
             placeholder="https://..."
             value={newUrl}
             onChange={(event) => setNewUrl(event.target.value)}
-            hint="No file storage is connected yet — paste a link to an already-hosted image."
+            hint="Already have a hosted link? Paste it here — or upload a photo directly using the button."
           />
         </div>
         <Button onClick={handleAdd} isLoading={isBusy} disabled={!newUrl.trim()}>
           Add Image
         </Button>
+      </div>
+
+      <div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          onChange={handleFileSelected}
+          disabled={isBusy}
+          className="hidden"
+          id="product-image-upload"
+        />
+        <Button variant="secondary" isLoading={isBusy} onClick={() => fileInputRef.current?.click()}>
+          Upload Photo
+        </Button>
+        <span className="ml-2 text-xs text-ink-muted">JPEG, PNG, WEBP, or GIF — up to 5 MB.</span>
       </div>
 
       {error ? <p className="text-sm text-error">{error}</p> : null}
