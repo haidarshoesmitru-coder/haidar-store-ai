@@ -29,6 +29,10 @@ const envSchema = z.object({
 
   ALLOWED_ORIGINS: z.string().default(''),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+
+  WHATSAPP_ACCESS_TOKEN: z.string().min(1),
+  WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -75,6 +79,9 @@ const CLIENT_SAFE_DEFAULTS: Env = {
   NEXTAUTH_SECRET: '',
   ALLOWED_ORIGINS: '',
   LOG_LEVEL: 'info',
+  WHATSAPP_ACCESS_TOKEN: '',
+  WHATSAPP_PHONE_NUMBER_ID: '',
+  WHATSAPP_VERIFY_TOKEN: '',
 };
 
 export const env: Env = typeof window === 'undefined' ? loadEnv() : CLIENT_SAFE_DEFAULTS;
