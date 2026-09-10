@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { env } from '@/shared/config/env';
 import { logger } from '@/shared/lib/logger';
 import { sendTextMessage } from '@/features/whatsapp/client';
+import { getAiReply } from '@/features/ai/conversation';
 
 /**
  * Why this file exists: the single entry point Meta calls for everything
@@ -22,14 +23,15 @@ import { sendTextMessage } from '@/features/whatsapp/client';
  * wrong product is or isn't in stock, which is worse than asking them to
  * describe it in words instead.
  *
- * This first version deliberately does NOT yet call any AI or product
- * lookup — it only proves the wiring works (Meta -> this route -> a
- * reply back to the customer's phone), the same "test the plumbing
- * before adding the real logic" step this project has used at every
- * other integration (Neon, Vercel Blob). The actual conversation engine
- * is the very next piece built on top of this.
+ * Owner recognition happens right here, before the AI is ever called:
+ * the sender's number is checked against `OWNER_WHATSAPP_NUMBERS`
+ * (env.ts, comma-separated — the shop has more than one admin number).
+ * This is the hard, code-level check the business rule requires — "is
+ * this an owner/admin" is decided by this comparison, never by asking
+ * the AI to infer it from what the message says.
  *
- * Dependencies: env.ts (WHATSAPP_VERIFY_TOKEN), whatsapp/client.ts.
+ * Dependencies: env.ts (WHATSAPP_VERIFY_TOKEN, OWNER_WHATSAPP_NUMBERS),
+ * whatsapp/client.ts, ai/conversation.ts.
  * Future usage: this is the one URL entered into Meta's App Dashboard
  * (Configuration -> Webhook). Meta will re-call the GET handler if the
  * subscription is ever re-verified.
@@ -70,14 +72,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     const customerNumber = message.from;
+    const ownerNumbers = env.OWNER_WHATSAPP_NUMBERS.split(',').map((n) => n.trim());
+    const isOwner = ownerNumbers.includes(customerNumber);
 
-    logger.info('WhatsApp message received', { from: customerNumber, type: message.type });
+    logger.info('WhatsApp message received', { from: customerNumber, type: message.type, isOwner });
 
     if (message.type === 'text' && message.text) {
-      await sendTextMessage(
-        customerNumber,
-        "Assalam o Alaikum! Haidar Store mein khush aamdeed. Aapka message mil gaya hai — jald hi aapki madad ki jayegi.",
-      );
+      const reply = await getAiReply(message.text.body, isOwner);
+      await sendTextMessage(customerNumber, reply);
     } else if (message.type === 'image') {
       await sendTextMessage(
         customerNumber,

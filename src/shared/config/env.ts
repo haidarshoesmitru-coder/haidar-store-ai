@@ -33,6 +33,17 @@ const envSchema = z.object({
   WHATSAPP_ACCESS_TOKEN: z.string().min(1),
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
   WHATSAPP_VERIFY_TOKEN: z.string().min(1),
+
+  GEMINI_API_KEY: z.string().min(1),
+  /// One or more of the owner's own WhatsApp numbers, comma-separated,
+  /// digits only, country code first, no '+' or spaces (exactly the
+  /// format WhatsApp sends in webhook payloads — e.g.
+  /// "923012965191,923365556157"). This is the ONLY thing that
+  /// distinguishes "the owner is asking" from "a customer is asking" —
+  /// see features/ai/conversation.ts for why that distinction is a hard,
+  /// code-level check rather than something left to the AI's judgment.
+  OWNER_WHATSAPP_NUMBERS: z.string().min(1),
+  SHOP_ADDRESS: z.string().min(1),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -82,6 +93,9 @@ const CLIENT_SAFE_DEFAULTS: Env = {
   WHATSAPP_ACCESS_TOKEN: '',
   WHATSAPP_PHONE_NUMBER_ID: '',
   WHATSAPP_VERIFY_TOKEN: '',
+  GEMINI_API_KEY: '',
+  OWNER_WHATSAPP_NUMBERS: '',
+  SHOP_ADDRESS: '',
 };
 
 export const env: Env = typeof window === 'undefined' ? loadEnv() : CLIENT_SAFE_DEFAULTS;
