@@ -67,6 +67,14 @@ export async function getAiReply(customerMessage: string, isOwner: boolean): Pro
     }
 
     for (const call of functionCalls) {
+      if (!call.name) {
+        // The SDK types this as optional; in practice Gemini always
+        // names the function it's calling. Skipping defensively rather
+        // than sending a nameless functionResponse, which the API
+        // itself would reject.
+        continue;
+      }
+
       let toolResult: unknown;
       if (call.name === 'search_products') {
         const query = (call.args as { query?: string })?.query ?? '';
