@@ -23,10 +23,12 @@ import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
  * prompt (which changes tone/rules) and the tool call (which changes
  * whether cost price is even present in the data the model sees).
  *
- * Model: gemini-2.5-flash-lite — chosen specifically for its free-tier
- * rate limit (highest of the Gemini free models), since a single-shop
- * WhatsApp bot's volume is comfortably within it and this project is
- * intentionally not paying for AI usage yet.
+ * Model: gemini-3.5-flash-lite — the current free-tier Flash model for
+ * new Gemini accounts (Google periodically retires older model IDs for
+ * new users; this project started on gemini-2.5-flash-lite, which
+ * returned a 404 telling new accounts to switch here). Chosen for the
+ * same reason as before: free-tier eligible, and a single-shop
+ * WhatsApp bot's volume is comfortably within its rate limits.
  *
  * Dependencies: @google/genai, env.ts, system-prompt.ts, tools.ts.
  * Future usage: called once per incoming text message from the webhook
@@ -35,7 +37,7 @@ import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
  * the exact same pattern as search_products.
  */
 
-const MODEL = 'gemini-2.5-flash-lite';
+const MODEL = 'gemini-3.5-flash-lite';
 const MAX_TOOL_ROUNDS = 3;
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
