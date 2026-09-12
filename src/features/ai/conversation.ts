@@ -1,5 +1,4 @@
 import { GoogleGenAI } from '@google/genai';
-import type { Content } from '@google/genai';
 import { env } from '@/shared/config/env';
 import { logger } from '@/shared/lib/logger';
 import { buildSystemPrompt } from '@/features/ai/system-prompt';
@@ -10,12 +9,23 @@ import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
  * (webhook route, WhatsApp client) was pipeline plumbing; this is the
  * first piece that reads what a customer actually wrote and decides how
  * to respond. Deliberately stateless per-message (v1 scope): each
- * incoming message is its own independent conversation with the model —
- * no chat history is persisted or replayed across separate WhatsApp
- * messages yet. That matches the plan's own "just a simple test for now,
- * more features later" scope, and avoids the extra complexity of
+ * incoming message starts its own fresh `ai.chats` session — no chat
+ * history is persisted or replayed across separate WhatsApp messages
+ * yet. That matches the plan's own "just a simple test for now, more
+ * features later" scope, and avoids the extra complexity of
  * storing/replaying multi-turn history before the single-turn version is
  * even proven out.
+ *
+ * Uses the SDK's `ai.chats` interface (create + sendMessage) rather than
+ * calling `ai.models.generateContent` directly with a hand-built
+ * `contents` array. This isn't a style preference — Gemini 3 models
+ * require a "thought_signature" on every function-call turn, and
+ * reconstructing conversation history by hand (as an earlier version of
+ * this file did) silently drops it, which the API then rejects with a
+ * 400 error. `ai.chats` keeps the full turn history — including that
+ * signature — internally, so multi-turn tool calling just works, per
+ * Google's own guidance: "If you're using the Google GenAI SDKs, you
+ * don't need to manage this process."
  *
  * The owner/customer distinction happens BEFORE this file even runs —
  * the webhook route decides `isOwner` from the sender's phone number and
@@ -43,31 +53,23 @@ const MAX_TOOL_ROUNDS = 3;
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
 export async function getAiReply(customerMessage: string, isOwner: boolean): Promise<string> {
-  const contents: Content[] = [{ role: 'user', parts: [{ text: customerMessage }] }];
   const systemInstruction = buildSystemPrompt(isOwner, env.SHOP_ADDRESS);
   const tools = [{ functionDeclarations: [searchProductsDeclaration] }];
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const response = await ai.models.generateContent({
-      model: MODEL,
-      contents,
-      config: { systemInstruction, tools },
-    });
+  const chat = ai.chats.create({
+    model: MODEL,
+    config: { systemInstruction, tools },
+  });
 
+  let response = await chat.sendMessage({ message: customerMessage });
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const functionCalls = response.functionCalls;
     if (!functionCalls || functionCalls.length === 0) {
       return response.text ?? 'Maazrat, is waqt jawab nahi de saka. Dubara koshish karen.';
     }
 
-    // Feed the model's own turn (including its function-call request)
-    // back into the conversation before the tool result — the SDK needs
-    // this exact turn present to keep its internal reasoning context
-    // consistent on the next call.
-    const modelTurn = response.candidates?.[0]?.content;
-    if (modelTurn) {
-      contents.push(modelTurn);
-    }
-
+    const responseParts = [];
     for (const call of functionCalls) {
       if (!call.name) {
         // The SDK types this as optional; in practice Gemini always
@@ -85,11 +87,10 @@ export async function getAiReply(customerMessage: string, isOwner: boolean): Pro
         toolResult = { error: `Unknown tool: ${call.name}` };
       }
 
-      contents.push({
-        role: 'user',
-        parts: [{ functionResponse: { name: call.name, response: { result: toolResult } } }],
-      });
+      responseParts.push({ functionResponse: { name: call.name, response: { result: toolResult } } });
     }
+
+    response = await chat.sendMessage({ message: responseParts });
   }
 
   logger.warn('AI conversation hit max tool-call rounds without a final answer');
