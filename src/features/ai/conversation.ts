@@ -33,25 +33,26 @@ import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
  * prompt (which changes tone/rules) and the tool call (which changes
  * whether cost price is even present in the data the model sees).
  *
- * Model: gemini-2.5-flash, with thinking explicitly disabled
- * (thinkingConfig.thinkingBudget: 0). Two Gemini version issues forced
- * this choice, in order:
- *   1. gemini-2.5-flash-lite (the original choice) returned a 404 —
- *      Google stopped issuing it to new accounts.
- *   2. Its suggested replacement, gemini-3.5-flash-lite, is a Gemini 3.x
- *      model — and Gemini 3.x models cannot disable thinking, which
- *      makes every function call require a "thought_signature." That
- *      requirement is inconsistently enforced right now (a
- *      Google-acknowledged issue with the 3.x family), and calls kept
- *      failing with 400 errors even when correctly using `ai.chats` to
- *      let the SDK manage signatures automatically.
- * gemini-2.5-flash sidesteps the whole problem: thinking (and therefore
- * the signature requirement) can be switched off outright.
+ * Model: gemini-3.6-flash. This is the THIRD model this file has used —
+ * Google keeps narrowing which models new accounts can reach:
+ *   1. gemini-2.5-flash-lite → 404, no longer issued to new accounts.
+ *   2. gemini-2.5-flash (with thinking disabled, to dodge the Gemini 3.x
+ *      thought-signature requirement below) → also 404'd days later.
+ *      Google's own error message redirected here.
+ *   3. gemini-3.6-flash (current pick) — a GA Gemini 3.x model, so
+ *      thinking cannot be disabed and every function call requires a
+ *      "thought_signature." Using `ai.chats` (create + sendMessage,
+ *      below) rather than hand-built history is the documented way to
+ *      let the SDK manage that signature correctly; an earlier attempt
+ *      on gemini-3.5-flash-lite still 400'd even through `ai.chats`,
+ *      which matches a bug Google has acknowledged in that specific
+ *      preview-ish model — the hope is a full GA release (3.6) is more
+ *      reliable here. If this same error recurs, that theory is wrong
+ *      and the fix needs to go deeper than a model swap.
  *
- * Known expiry: gemini-2.5-flash is scheduled for shutdown around
- * October 16, 2026 — Google will already have pointed new accounts at
- * whatever replaces it by then, the same way it already did for
- * flash-lite. This model choice will need revisiting before that date.
+ * Given how fast this list has moved even within days, expect to revisit
+ * this constant again — check Vercel's error logs for a 404 naming the
+ * new required model, and swap MODEL to whatever it says.
  *
  * Dependencies: @google/genai, env.ts, system-prompt.ts, tools.ts.
  * Future usage: called once per incoming text message from the webhook
@@ -60,18 +61,33 @@ import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
  * the exact same pattern as search_products.
  */
 
-const MODEL = 'gemini-2.5-flash';
+const MODEL = 'gemini-3.6-flash';
 const MAX_TOOL_ROUNDS = 3;
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
 export async function getAiReply(customerMessage: string, isOwner: boolean): Promise<string> {
+  try {
+    return await runConversation(customerMessage, isOwner);
+  } catch (error) {
+    // A silent failure here means the customer gets NO reply at all —
+    // worse than an imperfect one. Whatever goes wrong on Gemini's side
+    // (model churn, a 400/404/429, a network hiccup), the customer still
+    // gets a plain-language fallback instead of nothing.
+    logger.error('AI conversation failed', { error: error instanceof Error ? error.stack : String(error) });
+    return isOwner
+      ? 'AI se abhi jawab nahi mil saka (technical masla) — thodi dair mein dubara try karen.'
+      : 'Maazrat, is waqt jawab tayyar nahi kar saka. Barah-e-karam thodi dair mein dubara poochen ya dukan se raabta karen.';
+  }
+}
+
+async function runConversation(customerMessage: string, isOwner: boolean): Promise<string> {
   const systemInstruction = buildSystemPrompt(isOwner, env.SHOP_ADDRESS);
   const tools = [{ functionDeclarations: [searchProductsDeclaration] }];
 
   const chat = ai.chats.create({
     model: MODEL,
-    config: { systemInstruction, tools, thinkingConfig: { thinkingBudget: 0 } },
+    config: { systemInstruction, tools },
   });
 
   let response = await chat.sendMessage({ message: customerMessage });
