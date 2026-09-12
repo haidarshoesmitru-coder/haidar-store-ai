@@ -33,12 +33,25 @@ import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
  * prompt (which changes tone/rules) and the tool call (which changes
  * whether cost price is even present in the data the model sees).
  *
- * Model: gemini-3.5-flash-lite — the current free-tier Flash model for
- * new Gemini accounts (Google periodically retires older model IDs for
- * new users; this project started on gemini-2.5-flash-lite, which
- * returned a 404 telling new accounts to switch here). Chosen for the
- * same reason as before: free-tier eligible, and a single-shop
- * WhatsApp bot's volume is comfortably within its rate limits.
+ * Model: gemini-2.5-flash, with thinking explicitly disabled
+ * (thinkingConfig.thinkingBudget: 0). Two Gemini version issues forced
+ * this choice, in order:
+ *   1. gemini-2.5-flash-lite (the original choice) returned a 404 —
+ *      Google stopped issuing it to new accounts.
+ *   2. Its suggested replacement, gemini-3.5-flash-lite, is a Gemini 3.x
+ *      model — and Gemini 3.x models cannot disable thinking, which
+ *      makes every function call require a "thought_signature." That
+ *      requirement is inconsistently enforced right now (a
+ *      Google-acknowledged issue with the 3.x family), and calls kept
+ *      failing with 400 errors even when correctly using `ai.chats` to
+ *      let the SDK manage signatures automatically.
+ * gemini-2.5-flash sidesteps the whole problem: thinking (and therefore
+ * the signature requirement) can be switched off outright.
+ *
+ * Known expiry: gemini-2.5-flash is scheduled for shutdown around
+ * October 16, 2026 — Google will already have pointed new accounts at
+ * whatever replaces it by then, the same way it already did for
+ * flash-lite. This model choice will need revisiting before that date.
  *
  * Dependencies: @google/genai, env.ts, system-prompt.ts, tools.ts.
  * Future usage: called once per incoming text message from the webhook
@@ -47,7 +60,7 @@ import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
  * the exact same pattern as search_products.
  */
 
-const MODEL = 'gemini-3.5-flash-lite';
+const MODEL = 'gemini-2.5-flash';
 const MAX_TOOL_ROUNDS = 3;
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
@@ -58,7 +71,7 @@ export async function getAiReply(customerMessage: string, isOwner: boolean): Pro
 
   const chat = ai.chats.create({
     model: MODEL,
-    config: { systemInstruction, tools },
+    config: { systemInstruction, tools, thinkingConfig: { thinkingBudget: 0 } },
   });
 
   let response = await chat.sendMessage({ message: customerMessage });
