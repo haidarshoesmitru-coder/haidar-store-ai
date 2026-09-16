@@ -3,6 +3,12 @@ import { env } from '@/shared/config/env';
 import { logger } from '@/shared/lib/logger';
 import { buildSystemPrompt } from '@/features/ai/system-prompt';
 import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
+import {
+  addNewStock,
+  addNewStockDeclaration,
+  recordInShopSale,
+  recordInShopSaleDeclaration,
+} from '@/features/ai/owner-tools';
 
 /**
  * Why this file exists: the actual "brain" — everything before this
@@ -83,7 +89,10 @@ export async function getAiReply(customerMessage: string, isOwner: boolean): Pro
 
 async function runConversation(customerMessage: string, isOwner: boolean): Promise<string> {
   const systemInstruction = buildSystemPrompt(isOwner, env.SHOP_ADDRESS);
-  const tools = [{ functionDeclarations: [searchProductsDeclaration] }];
+  const functionDeclarations = isOwner
+    ? [searchProductsDeclaration, addNewStockDeclaration, recordInShopSaleDeclaration]
+    : [searchProductsDeclaration];
+  const tools = [{ functionDeclarations }];
 
   const chat = ai.chats.create({
     model: MODEL,
@@ -108,12 +117,27 @@ async function runConversation(customerMessage: string, isOwner: boolean): Promi
         continue;
       }
 
+      const args = call.args as Record<string, unknown>;
       let toolResult: unknown;
+
       if (call.name === 'search_products') {
-        const query = (call.args as { query?: string })?.query ?? '';
-        toolResult = await searchProducts(query, isOwner);
+        toolResult = await searchProducts((args?.query as string) ?? '', isOwner);
+      } else if (call.name === 'add_new_stock' && isOwner) {
+        toolResult = await addNewStock(
+          (args?.productName as string) ?? '',
+          (args?.quantity as number) ?? 0,
+          args?.purchasePrice as number | undefined,
+          args?.salePrice as number | undefined,
+        );
+      } else if (call.name === 'record_in_shop_sale' && isOwner) {
+        toolResult = await recordInShopSale((args?.productName as string) ?? '', (args?.quantity as number) ?? 0);
       } else {
-        toolResult = { error: `Unknown tool: ${call.name}` };
+        // Either an unknown tool name, or a customer's message somehow
+        // requested an owner-only tool — the tool list itself already
+        // prevents Gemini from being offered these when isOwner is
+        // false, but this is the hard backstop in case of any model
+        // misbehavior.
+        toolResult = { error: `Tool not available: ${call.name}` };
       }
 
       responseParts.push({ functionResponse: { name: call.name, response: { result: toolResult } } });
