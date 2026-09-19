@@ -92,6 +92,9 @@ export async function addNewStock(
   }
 
   const variant = matches[0];
+  if (!variant) {
+    return { success: false, message: `"${productName}" catalog mein nahi mila.` };
+  }
   const inventoryService = new InventoryService();
   const variantService = new VariantService();
 
@@ -146,6 +149,9 @@ export async function recordInShopSale(productName: string, quantity: number): P
   }
 
   const variant = matches[0];
+  if (!variant) {
+    return { success: false, message: `"${productName}" catalog mein nahi mila.` };
+  }
   const orderService = new OrderService();
 
   try {
