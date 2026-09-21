@@ -159,6 +159,7 @@ export async function recordInShopSale(productName: string, quantity: number): P
       source: 'ADMIN',
       fulfillmentType: 'PICKUP',
       guestName: 'In-shop Sale',
+      discount: 0,
       items: [{ variantId: variant.variantId, quantity }],
     });
     await orderService.confirmOrder(order.id);
