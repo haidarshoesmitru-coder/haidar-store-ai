@@ -8,6 +8,8 @@ import {
   addNewStockDeclaration,
   recordInShopSale,
   recordInShopSaleDeclaration,
+  createNewProduct,
+  createNewProductDeclaration,
 } from '@/features/ai/owner-tools';
 
 /**
@@ -90,7 +92,7 @@ export async function getAiReply(customerMessage: string, isOwner: boolean): Pro
 async function runConversation(customerMessage: string, isOwner: boolean): Promise<string> {
   const systemInstruction = buildSystemPrompt(isOwner, env.SHOP_ADDRESS);
   const functionDeclarations = isOwner
-    ? [searchProductsDeclaration, addNewStockDeclaration, recordInShopSaleDeclaration]
+    ? [searchProductsDeclaration, addNewStockDeclaration, recordInShopSaleDeclaration, createNewProductDeclaration]
     : [searchProductsDeclaration];
   const tools = [{ functionDeclarations }];
 
@@ -131,6 +133,14 @@ async function runConversation(customerMessage: string, isOwner: boolean): Promi
         );
       } else if (call.name === 'record_in_shop_sale' && isOwner) {
         toolResult = await recordInShopSale((args?.productName as string) ?? '', (args?.quantity as number) ?? 0);
+      } else if (call.name === 'create_new_product' && isOwner) {
+        toolResult = await createNewProduct(
+          (args?.productName as string) ?? '',
+          (args?.quantity as number) ?? 0,
+          (args?.salePrice as number) ?? 0,
+          args?.purchasePrice as number | undefined,
+          args?.categoryName as string | undefined,
+        );
       } else {
         // Either an unknown tool name, or a customer's message somehow
         // requested an owner-only tool — the tool list itself already

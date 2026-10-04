@@ -2,8 +2,9 @@ import { Type } from '@google/genai';
 import { db } from '@/shared/lib/db';
 import { InventoryService } from '@/features/catalog/services/inventory.service.impl';
 import { VariantService } from '@/features/catalog/services/variant.service';
+import { ProductService } from '@/features/catalog/services/product.service.impl';
 import { OrderService } from '@/features/orders/services/order.service.impl';
-import { InsufficientStockError } from '@/features/catalog/errors';
+import { InsufficientStockError, ProductSlugAlreadyExistsError } from '@/features/catalog/errors';
 
 /**
  * Why this file exists: these two tools are only ever registered for the
@@ -174,6 +175,130 @@ export async function recordInShopSale(productName: string, quantity: number): P
   } catch (error) {
     if (error instanceof InsufficientStockError) {
       return { success: false, message: `${variant.productName} ka itna stock available nahi hai.` };
+    }
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: create_new_product
+// ---------------------------------------------------------------------------
+
+/**
+ * Why this exists separately from add_new_stock: that tool only ever
+ * restocks a product ALREADY in the catalog — a deliberate v1 boundary,
+ * because creating a product from scratch needs a category assignment
+ * (Product.categoryId is required in the schema) that a bare WhatsApp
+ * message doesn't naturally include. This tool is the explicit,
+ * owner-requested extension of that boundary: it can create a brand-new
+ * product, but ONLY once a real category is resolved — never guessed. If
+ * the owner didn't name one (or named one that doesn't match anything),
+ * this returns the actual list of existing categories so the AI asks a
+ * real question instead of inventing a category that doesn't exist.
+ */
+
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+interface CategoryMatch {
+  id: string;
+  name: string;
+}
+
+async function resolveCategory(categoryName: string | undefined): Promise<{
+  category: CategoryMatch | null;
+  allCategories: CategoryMatch[];
+}> {
+  const allCategories = await db.category.findMany({
+    where: { isActive: true, deletedAt: null },
+    select: { id: true, name: true },
+  });
+
+  if (!categoryName) {
+    return { category: null, allCategories };
+  }
+
+  const matches = allCategories.filter((c) => c.name.toLowerCase().includes(categoryName.toLowerCase()));
+  return { category: matches.length === 1 ? matches[0]! : null, allCategories };
+}
+
+export const createNewProductDeclaration = {
+  name: 'create_new_product',
+  description:
+    "Create a BRAND NEW product that doesn't exist in the catalog yet (owner only), with its first variant and initial stock. Every product needs a category — if the owner didn't mention one, or the one they mentioned doesn't match an existing category, this returns the real list of categories so you can ask the owner which one fits. Never invent or guess a category.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      productName: { type: Type.STRING, description: 'The new product\'s name, e.g. "Carezza Body Spray".' },
+      categoryName: {
+        type: Type.STRING,
+        description: 'The category this product belongs to, matched against existing categories. Omit if the owner did not say one.',
+      },
+      quantity: { type: Type.NUMBER, description: 'Initial stock quantity.' },
+      salePrice: { type: Type.NUMBER, description: 'Selling price per unit.' },
+      purchasePrice: { type: Type.NUMBER, description: 'Purchase/cost price per unit, if mentioned.' },
+    },
+    required: ['productName', 'quantity', 'salePrice'],
+  },
+};
+
+export async function createNewProduct(
+  productName: string,
+  quantity: number,
+  salePrice: number,
+  purchasePrice?: number,
+  categoryName?: string,
+): Promise<unknown> {
+  const { category, allCategories } = await resolveCategory(categoryName);
+
+  if (!category) {
+    return {
+      success: false,
+      needsClarification: true,
+      message: categoryName
+        ? `"${categoryName}" naam ki category nahi mili.`
+        : 'Ye naya product hai — konsi category mein rakhein?',
+      availableCategories: allCategories.map((c) => c.name),
+    };
+  }
+
+  const productService = new ProductService();
+
+  try {
+    await productService.createProduct({
+      categoryId: category.id,
+      name: productName,
+      slug: slugify(productName),
+      status: 'ACTIVE',
+      isFeatured: false,
+      isBestSeller: false,
+      isNewArrival: true,
+      variants: [
+        {
+          price: salePrice,
+          ...(purchasePrice !== undefined ? { costPrice: purchasePrice } : {}),
+          isDefault: true,
+          attributes: [],
+          initialQuantity: quantity,
+        },
+      ],
+    });
+
+    return {
+      success: true,
+      message: `"${productName}" naya product ban gaya (category: ${category.name}), ${quantity} unit stock ke sath, price Rs. ${salePrice}.`,
+    };
+  } catch (error) {
+    if (error instanceof ProductSlugAlreadyExistsError) {
+      return {
+        success: false,
+        message: `"${productName}" jaisa naam pehle se catalog mein maujood hai. Thora alag naam try karen ya admin panel check karen.`,
+      };
     }
     throw error;
   }
