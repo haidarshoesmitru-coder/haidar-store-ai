@@ -90,7 +90,7 @@ export async function getAiReply(customerMessage: string, isOwner: boolean, send
     logger.error('AI conversation failed', { error: error instanceof Error ? error.stack : String(error) });
     return isOwner
       ? 'AI se abhi jawab nahi mil saka (technical masla) — thodi dair mein dubara try karen.'
-      : 'Maazrat, is waqt jawab tayyar nahi kar saka. Barah-e-karam thodi dair mein dubara poochen ya dukan se raabta karen.';
+      : 'Sorry bhai, samajh nahi aaya — zara dobara batayen kya chahiye tha?';
   }
 }
 
@@ -128,7 +128,7 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const functionCalls = response.functionCalls;
     if (!functionCalls || functionCalls.length === 0) {
-      finalText = response.text ?? 'Maazrat, is waqt jawab nahi de saka. Dubara koshish karen.';
+      finalText = response.text ?? 'Sorry bhai, samajh nahi aaya — dobara batayen?';
       break;
     }
 
@@ -194,8 +194,7 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
 
   if (finalText === null) {
     logger.warn('AI conversation hit max tool-call rounds without a final answer');
-    finalText =
-      'Maazrat, is waqt jawab tayyar nahi kar saka. Barah-e-karam dobara poochen ya dukan se raabta karen.';
+    finalText = 'Bhai ye wala zara samajh nahi aaya — product ka naam dobara batayen?';
   }
 
   // Persist the TEXT exchange only — never the intermediate
