@@ -1,5 +1,6 @@
 import { Type } from '@google/genai';
 import { db } from '@/shared/lib/db';
+import { tokenizeSearchQuery } from '@/features/ai/tools';
 import { env } from '@/shared/config/env';
 import { logger } from '@/shared/lib/logger';
 import { ValidationError } from '@/shared/lib/errors';
@@ -56,7 +57,8 @@ interface VariantMatch {
 }
 
 async function findMatchingVariants(query: string): Promise<VariantMatch[]> {
-  const variants = await db.productVariant.findMany({
+  // Stage 1: exact phrase — precise when the spelling is right.
+  let variants = await db.productVariant.findMany({
     where: {
       status: 'ACTIVE',
       deletedAt: null,
@@ -65,6 +67,27 @@ async function findMatchingVariants(query: string): Promise<VariantMatch[]> {
     include: { product: true },
     take: 5,
   });
+
+  // Stage 2 (only when stage 1 finds nothing): typo-tolerant — any
+  // significant word matches, so "Sunslik 400ml" still finds Sunsilk
+  // products via "400ml" instead of failing the whole stock/sale action.
+  if (variants.length === 0) {
+    const tokens = tokenizeSearchQuery(query);
+    if (tokens.length > 0) {
+      variants = await db.productVariant.findMany({
+        where: {
+          status: 'ACTIVE',
+          deletedAt: null,
+          OR: tokens.map((term) => ({
+            product: { name: { contains: term, mode: 'insensitive' as const } },
+          })),
+        },
+        include: { product: true },
+        take: 5,
+      });
+    }
+  }
+
   return variants.map((v) => ({ variantId: v.id, productName: v.product.name }));
 }
 

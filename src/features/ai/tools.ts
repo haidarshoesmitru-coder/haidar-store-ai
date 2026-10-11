@@ -33,15 +33,43 @@ export interface ProductSearchResult {
   quantityAvailable: number;
 }
 
-export async function searchProducts(query: string, isOwner: boolean): Promise<ProductSearchResult[]> {
-  const variants = await db.productVariant.findMany({
+/**
+ * Typo-tolerant search tokens. Real incident (Oct 11, 2026): a customer
+ * wrote "Sunslik shampoo 400ml" (misspelled Sunsilk) — the phrase-contains
+ * query found nothing, so the model burned all 3 tool rounds retrying
+ * spelling variations and the user got the max-rounds fallback. Splitting
+ * the query into significant words means one correct word ("shampoo") is
+ * enough to surface candidates the model can then pick from or clarify
+ * about, instead of failing on one misspelled word.
+ */
+const SEARCH_STOPWORDS = new Set([
+  // Roman Urdu filler words — never product names
+  'hai', 'hain', 'ho', 'ga', 'gi', 'ge', 'ka', 'ki', 'ko', 'ke', 'mein', 'me',
+  'se', 'aur', 'ya', 'kya', 'nahi', 'nahin', 'koi', 'yeh', 'ye', 'woh', 'wo',
+  'wala', 'wali', 'wale', 'walay', 'chahiye', 'chahye', 'batao', 'batain',
+  'kitne', 'kitna', 'kitni', 'kaunsa', 'kaunsi', 'mujhe', 'mujhay',
+  // English filler words
+  'the', 'a', 'an', 'and', 'or', 'is', 'are', 'it', 'of', 'for', 'in', 'on',
+  'to', 'do', 'does', 'have', 'has', 'i', 'you', 'me', 'my', 'we',
+]);
+
+export function tokenizeSearchQuery(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !SEARCH_STOPWORDS.has(t));
+}
+
+/** Shared variant lookup: matches ANY of the given terms (name or SKU). */
+async function findVariantsByTerms(terms: string[]) {
+  return db.productVariant.findMany({
     where: {
       status: 'ACTIVE',
       deletedAt: null,
-      OR: [
-        { product: { name: { contains: query, mode: 'insensitive' } } },
-        { sku: { contains: query, mode: 'insensitive' } },
-      ],
+      OR: terms.flatMap((term) => [
+        { product: { name: { contains: term, mode: 'insensitive' as const } } },
+        { sku: { contains: term, mode: 'insensitive' as const } },
+      ]),
     },
     include: {
       product: true,
@@ -49,6 +77,21 @@ export async function searchProducts(query: string, isOwner: boolean): Promise<P
     },
     take: 5,
   });
+}
+
+export async function searchProducts(query: string, isOwner: boolean): Promise<ProductSearchResult[]> {
+  // Stage 1: exact phrase — precise when the spelling is right.
+  let variants = await findVariantsByTerms([query]);
+
+  // Stage 2 (only when stage 1 finds nothing): any significant word
+  // matches — typo-tolerant, e.g. "Sunslik shampoo 400ml" still finds
+  // shampoos via "shampoo" and "400ml".
+  if (variants.length === 0) {
+    const tokens = tokenizeSearchQuery(query);
+    if (tokens.length > 0) {
+      variants = await findVariantsByTerms(tokens);
+    }
+  }
 
   return variants.map((variant) => {
     const result: ProductSearchResult = {
