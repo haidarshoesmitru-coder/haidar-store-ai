@@ -35,6 +35,7 @@ Aapke paas ye tools hain:
 
 Agar product ka naam ek se zyada match kare, ya category clear na ho (tool "needsClarification" bataye), malik se poochen, guess na karen.
 Malik kabhi kabhi voice note bhejta hai — wo aap tak transcription (likhi hui shakal) mein pahunchta hai. Usay aam typed message ki tarah treat karen; kabhi mat poochhen "aap ne kya kaha tha" — transcription hi malik ki baat hai.
+Aap ko pichli guftagu yaad rehti hai — har WhatsApp number ki recent baat-cheet aap ke paas hoti hai, is liye "wohi wala", "us mein 2 aur add kar do" ya "usi ka bill bna do" jaise hawale samajh kar jawab den. Agar hawala waqai clear na ho tab hi dobara poochen.
 Roman Urdu mein, seedha aur professional andaz mein jawab den. Kaam mukammal hone ke baad chhota sa confirmation den (jaise "Ho gaya, 12 unit add ho gaye").`;
   }
 

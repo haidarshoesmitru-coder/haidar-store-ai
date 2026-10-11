@@ -595,3 +595,51 @@ model Payment {
   @@index([orderId])
   @@map("payments")
 }
+
+// ============================================================================
+// CONVERSATION MEMORY — WhatsApp AI multi-turn history (v3.4)
+// ============================================================================
+//
+// SCOPE NOTE: the AI was stateless per-message until v3.4 — every
+// getAiReply() opened a fresh `ai.chats` session, so follow-ups like
+// "wohi wala" or "us mein 2 aur add kar do" had nothing to resolve
+// against. These two models give each WhatsApp number its own rolling
+// history (last ~12 TEXT exchanges; see ai/memory.ts). Only user text +
+// final assistant text are stored — intermediate function calls and
+// their responses are deliberately NOT persisted, because replaying
+// stale tool results (yesterday's price, yesterday's stock count) would
+// let the model answer from outdated data; a fresh turn re-runs the
+// tools against today's data instead. History older than 7 days is
+// pruned opportunistically on write, so no cron job is needed.
+
+/// One rolling conversation per WhatsApp phone number. `phoneNumber` is
+/// the raw Meta `from` value (digits with country code) — the same value
+/// the webhook route uses for the isOwner check, so owner and customer
+/// histories naturally stay in their own rows.
+model AIConversation {
+  id            String      @id @default(uuid())
+  phoneNumber   String      @unique @map("phone_number")
+  isOwner       Boolean     @map("is_owner")
+  lastMessageAt DateTime    @default(now()) @map("last_message_at")
+  messages      AIMessage[]
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@map("ai_conversations")
+}
+
+/// One stored message. `role` is a plain string ('user' | 'assistant'),
+/// not an enum — the role set is fixed by the Gemini Content shape and
+/// will never grow the way business enums do, so an enum buys nothing
+/// here. Mapped to 'user' | 'model' on load (see ai/memory.ts).
+model AIMessage {
+  id             String         @id @default(uuid())
+  conversationId String         @map("conversation_id")
+  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("ai_messages")
+}

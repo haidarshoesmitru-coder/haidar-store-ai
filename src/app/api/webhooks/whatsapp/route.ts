@@ -129,7 +129,7 @@ async function handleVoiceNote(senderNumber: string, isOwner: boolean, mediaId: 
     // The transcription text is logged here only (never audio bytes,
     // never the sender's number).
     logger.info('Voice note routed to owner AI', { chars: transcription.length });
-    const reply = await getAiReply(transcription, true);
+    const reply = await getAiReply(transcription, true, senderNumber);
     await sendTextMessage(senderNumber, reply);
   } catch (error) {
     logger.error('Voice note handling failed', {
@@ -183,7 +183,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     logger.info('WhatsApp message received', { from: customerNumber, type: message.type, isOwner });
 
     if (message.type === 'text' && message.text) {
-      const reply = await getAiReply(message.text.body, isOwner);
+      const reply = await getAiReply(message.text.body, isOwner, customerNumber);
       await sendTextMessage(customerNumber, reply);
     } else if (message.type === 'audio' && message.audio?.id) {
       await handleVoiceNote(customerNumber, isOwner, message.audio.id);

@@ -3,6 +3,7 @@ import { env } from '@/shared/config/env';
 import { logger } from '@/shared/lib/logger';
 import { buildSystemPrompt } from '@/features/ai/system-prompt';
 import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
+import { loadHistory, saveExchange } from '@/features/ai/memory';
 import {
   addNewStock,
   addNewStockDeclaration,
@@ -22,13 +23,11 @@ import {
  * Why this file exists: the actual "brain" — everything before this
  * (webhook route, WhatsApp client) was pipeline plumbing; this is the
  * first piece that reads what a customer actually wrote and decides how
- * to respond. Deliberately stateless per-message (v1 scope): each
- * incoming message starts its own fresh `ai.chats` session — no chat
- * history is persisted or replayed across separate WhatsApp messages
- * yet. That matches the plan's own "just a simple test for now, more
- * features later" scope, and avoids the extra complexity of
- * storing/replaying multi-turn history before the single-turn version is
- * even proven out.
+ * to respond. Since v3.4 it has MEMORY: each incoming message replays
+ * that WhatsApp number's recent text exchanges as the chat's `history`
+ * (see ai/memory.ts), so follow-ups like "wohi wala" resolve — before
+ * v3.4 every message started a fresh stateless session and forgot
+ * everything.
  *
  * Uses the SDK's `ai.chats` interface (create + sendMessage) rather than
  * calling `ai.models.generateContent` directly with a hand-built
@@ -80,9 +79,9 @@ const MAX_TOOL_ROUNDS = 3;
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
-export async function getAiReply(customerMessage: string, isOwner: boolean): Promise<string> {
+export async function getAiReply(customerMessage: string, isOwner: boolean, senderNumber: string): Promise<string> {
   try {
-    return await runConversation(customerMessage, isOwner);
+    return await runConversation(customerMessage, isOwner, senderNumber);
   } catch (error) {
     // A silent failure here means the customer gets NO reply at all —
     // worse than an imperfect one. Whatever goes wrong on Gemini's side
@@ -95,7 +94,7 @@ export async function getAiReply(customerMessage: string, isOwner: boolean): Pro
   }
 }
 
-async function runConversation(customerMessage: string, isOwner: boolean): Promise<string> {
+async function runConversation(customerMessage: string, isOwner: boolean, senderNumber: string): Promise<string> {
   const systemInstruction = buildSystemPrompt(isOwner, env.SHOP_ADDRESS);
   const functionDeclarations = isOwner
     ? [
@@ -110,17 +109,27 @@ async function runConversation(customerMessage: string, isOwner: boolean): Promi
     : [searchProductsDeclaration];
   const tools = [{ functionDeclarations }];
 
+  // v3.4 memory: replay this number's recent TEXT exchanges as the
+  // chat's history, oldest-first. loadHistory degrades to [] on any
+  // failure, so a memory outage never breaks the reply — and the SDK
+  // keeps managing thought_signatures internally across the replayed
+  // turns exactly as it does for live ones.
+  const history = await loadHistory(senderNumber);
+
   const chat = ai.chats.create({
     model: AI_MODEL,
     config: { systemInstruction, tools },
+    history,
   });
 
   let response = await chat.sendMessage({ message: customerMessage });
+  let finalText: string | null = null;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const functionCalls = response.functionCalls;
     if (!functionCalls || functionCalls.length === 0) {
-      return response.text ?? 'Maazrat, is waqt jawab nahi de saka. Dubara koshish karen.';
+      finalText = response.text ?? 'Maazrat, is waqt jawab nahi de saka. Dubara koshish karen.';
+      break;
     }
 
     const responseParts = [];
@@ -183,6 +192,17 @@ async function runConversation(customerMessage: string, isOwner: boolean): Promi
     response = await chat.sendMessage({ message: responseParts });
   }
 
-  logger.warn('AI conversation hit max tool-call rounds without a final answer');
-  return 'Maazrat, is waqt jawab tayyar nahi kar saka. Barah-e-karam dobara poochen ya dukan se raabta karen.';
+  if (finalText === null) {
+    logger.warn('AI conversation hit max tool-call rounds without a final answer');
+    finalText =
+      'Maazrat, is waqt jawab tayyar nahi kar saka. Barah-e-karam dobara poochen ya dukan se raabta karen.';
+  }
+
+  // Persist the TEXT exchange only — never the intermediate
+  // functionCalls/functionResponses (see ai/memory.ts for why stale
+  // tool results must not replay). saveExchange catches its own
+  // errors, so awaiting it here can't break the reply.
+  await saveExchange(senderNumber, isOwner, customerMessage, finalText);
+
+  return finalText;
 }
