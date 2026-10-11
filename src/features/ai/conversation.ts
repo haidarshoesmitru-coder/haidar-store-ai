@@ -10,6 +10,12 @@ import {
   recordInShopSaleDeclaration,
   createNewProduct,
   createNewProductDeclaration,
+  createNewCategory,
+  createNewCategoryDeclaration,
+  createBillQr,
+  createBillQrDeclaration,
+  confirmPaymentByOwner,
+  confirmPaymentDeclaration,
 } from '@/features/ai/owner-tools';
 
 /**
@@ -60,7 +66,7 @@ import {
  *
  * Given how fast this list has moved even within days, expect to revisit
  * this constant again — check Vercel's error logs for a 404 naming the
- * new required model, and swap MODEL to whatever it says.
+ * new required model, and swap AI_MODEL to whatever it says.
  *
  * Dependencies: @google/genai, env.ts, system-prompt.ts, tools.ts.
  * Future usage: called once per incoming text message from the webhook
@@ -69,7 +75,7 @@ import {
  * the exact same pattern as search_products.
  */
 
-const MODEL = 'gemini-3.6-flash';
+export const AI_MODEL = 'gemini-3.6-flash';
 const MAX_TOOL_ROUNDS = 3;
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
@@ -92,12 +98,20 @@ export async function getAiReply(customerMessage: string, isOwner: boolean): Pro
 async function runConversation(customerMessage: string, isOwner: boolean): Promise<string> {
   const systemInstruction = buildSystemPrompt(isOwner, env.SHOP_ADDRESS);
   const functionDeclarations = isOwner
-    ? [searchProductsDeclaration, addNewStockDeclaration, recordInShopSaleDeclaration, createNewProductDeclaration]
+    ? [
+        searchProductsDeclaration,
+        addNewStockDeclaration,
+        recordInShopSaleDeclaration,
+        createNewProductDeclaration,
+        createNewCategoryDeclaration,
+        createBillQrDeclaration,
+        confirmPaymentDeclaration,
+      ]
     : [searchProductsDeclaration];
   const tools = [{ functionDeclarations }];
 
   const chat = ai.chats.create({
-    model: MODEL,
+    model: AI_MODEL,
     config: { systemInstruction, tools },
   });
 
@@ -140,6 +154,19 @@ async function runConversation(customerMessage: string, isOwner: boolean): Promi
           (args?.salePrice as number) ?? 0,
           args?.purchasePrice as number | undefined,
           args?.categoryName as string | undefined,
+        );
+      } else if (call.name === 'create_category' && isOwner) {
+        toolResult = await createNewCategory((args?.categoryName as string) ?? '');
+      } else if (call.name === 'create_bill_qr' && isOwner) {
+        toolResult = await createBillQr(
+          (args?.amountRupees as number) ?? 0,
+          (args?.customerPhone as string) ?? '',
+          args?.description as string | undefined,
+        );
+      } else if (call.name === 'confirm_payment' && isOwner) {
+        toolResult = await confirmPaymentByOwner(
+          args?.billNo as string | undefined,
+          args?.customerPhone as string | undefined,
         );
       } else {
         // Either an unknown tool name, or a customer's message somehow

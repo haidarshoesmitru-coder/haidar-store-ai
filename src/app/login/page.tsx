@@ -30,9 +30,24 @@ export default function LoginPage() {
   );
 }
 
+/**
+ * Why this helper exists: `callbackUrl` comes from the query string, and
+ * assigning it to `window.location.href` unchecked lets an attacker
+ * craft `/login?callbackUrl=https://evil.com` and bounce a
+ * freshly-authenticated user to a phishing page ("session expired, log
+ * in again"). Only same-origin relative paths are allowed — anything
+ * else falls back to /admin.
+ */
+function getSafeCallbackUrl(raw: string | null): string {
+  if (raw && raw.startsWith('/') && !raw.startsWith('//') && !raw.startsWith('/\\')) {
+    return raw;
+  }
+  return '/admin';
+}
+
 function LoginForm() {
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get('callbackUrl') ?? '/admin';
+  const callbackUrl = getSafeCallbackUrl(searchParams.get('callbackUrl'));
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

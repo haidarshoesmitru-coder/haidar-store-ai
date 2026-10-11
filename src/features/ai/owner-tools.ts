@@ -1,10 +1,24 @@
 import { Type } from '@google/genai';
 import { db } from '@/shared/lib/db';
+import { env } from '@/shared/config/env';
+import { logger } from '@/shared/lib/logger';
+import { ValidationError } from '@/shared/lib/errors';
+import { validate } from '@/shared/validation/validate';
+import { sendTextMessage, sendImageMessage } from '@/features/whatsapp/client';
 import { InventoryService } from '@/features/catalog/services/inventory.service.impl';
 import { VariantService } from '@/features/catalog/services/variant.service';
 import { ProductService } from '@/features/catalog/services/product.service.impl';
+import { CategoryService } from '@/features/catalog/services/category.service.impl';
 import { OrderService } from '@/features/orders/services/order.service.impl';
-import { InsufficientStockError, ProductSlugAlreadyExistsError } from '@/features/catalog/errors';
+import { InsufficientStockError, ProductSlugAlreadyExistsError, CategoryAlreadyExistsError } from '@/features/catalog/errors';
+import {
+  PaymentService,
+  createPaymentSchema,
+  formatRupees,
+  PaymentBillNotFoundError,
+  NoPendingPaymentError,
+  PaymentAlreadyCancelledError,
+} from '@/features/payments';
 
 /**
  * Why this file exists: these two tools are only ever registered for the
@@ -299,6 +313,272 @@ export async function createNewProduct(
         success: false,
         message: `"${productName}" jaisa naam pehle se catalog mein maujood hai. Thora alag naam try karen ya admin panel check karen.`,
       };
+    }
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: create_category
+// ---------------------------------------------------------------------------
+
+/**
+ * Why this exists: create_new_product needs a REAL category, and the owner
+ * often names one that doesn't exist yet (e.g. "Body Spray"). Before this
+ * tool, the AI's only answer was "Admin Panel se bana len" — a flow-killer
+ * in the middle of a WhatsApp conversation. Now the AI creates the category
+ * itself and continues with the product in the next turn, so "new category
+ * bna do" just works. Owner-only, like every tool in this file.
+ */
+
+export const createNewCategoryDeclaration = {
+  name: 'create_category',
+  description:
+    "Create a NEW product category (owner only) — use when the owner asks for a new category (e.g. 'new category bna do') or names a category that doesn't exist yet. Returns the created category so create_new_product can use it right away.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      categoryName: { type: Type.STRING, description: 'The new category name, e.g. "Body Spray".' },
+    },
+    required: ['categoryName'],
+  },
+};
+
+export async function createNewCategory(categoryName: string): Promise<unknown> {
+  const name = categoryName.trim();
+  if (!name) {
+    return { success: false, message: 'Category ka naam batayen.' };
+  }
+
+  const categoryService = new CategoryService();
+  try {
+    const category = await categoryService.createCategory({
+      name,
+      slug: slugify(name),
+      sortOrder: 0,
+    });
+    return {
+      success: true,
+      message: `"${category.name}" category ban gayi. Ab is mein product add kar sakte hain.`,
+      category: { id: category.id, name: category.name },
+    };
+  } catch (error) {
+    if (error instanceof CategoryAlreadyExistsError) {
+      // Duplicate slug — the category is effectively there; fetch it so
+      // the product-creation flow can continue instead of dying.
+      const existing = await db.category.findFirst({
+        where: { slug: slugify(name) },
+        select: { id: true, name: true },
+      });
+      return {
+        success: true,
+        alreadyExisted: true,
+        message: `"${existing?.name ?? name}" category pehle se maujood hai — isi ko use karen.`,
+        category: existing ? { id: existing.id, name: existing.name } : null,
+      };
+    }
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: create_bill_qr
+// ---------------------------------------------------------------------------
+
+/**
+ * Why this tool exists separately from record_in_shop_sale: that tool
+ * records a sale at the CATALOG price and deducts stock — but a QR bill
+ * is for the FINAL AGREED amount, which after mol-tol/bargaining is often
+ * different from the catalog price (and the Orders module still has no
+ * per-item price override). So this tool does payment only: it creates
+ * the bill, renders the QR, and delivers it to the customer's WhatsApp.
+ * Stock deduction stays with record_in_shop_sale for now; the two get
+ * unified once price overrides exist.
+ *
+ * The QR image goes out via sendImageMessage (media upload + image
+ * message). If that fails, the bill itself is safely stored, so the tool
+ * falls back to a text message carrying the same payment details —
+ * the customer is never left with nothing.
+ */
+
+export const createBillQrDeclaration = {
+  name: 'create_bill_qr',
+  description:
+    "Create a payable bill with a JazzCash QR code (owner only). Use when the owner gives a FINAL bill amount (after any bargaining/mol-tol) and the customer's WhatsApp number — e.g. 'Ali ko 1500 ka bill bhejo, number 923001234567'. Creates the bill record, generates the QR, and sends the QR image to the customer on WhatsApp. The QR amount is always the final agreed amount — never the catalog price.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      amountRupees: {
+        type: Type.NUMBER,
+        description: 'Final agreed bill amount in whole rupees (after bargaining).',
+      },
+      customerPhone: {
+        type: Type.STRING,
+        description: "Customer's WhatsApp number, digits with country code, e.g. '923001234567'.",
+      },
+      description: {
+        type: Type.STRING,
+        description: 'What the bill is for, e.g. "2x Sunsilk Shampoo". Omit if the owner did not say.',
+      },
+    },
+    required: ['amountRupees', 'customerPhone'],
+  },
+};
+
+export async function createBillQr(
+  amountRupees: number,
+  customerPhone: string,
+  description?: string,
+): Promise<unknown> {
+  // Same schema the HTTP route uses — the tool and the API can never
+  // disagree on what a valid bill looks like.
+  let input;
+  try {
+    input = validate(createPaymentSchema, {
+      amountRupees: Math.round(amountRupees),
+      customerPhone,
+      ...(description ? { description } : {}),
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      const issues = error.details?.map((d) => d.issue).join(' ') ?? 'Ghalat input.';
+      return { success: false, message: `Bill nahi ban saka: ${issues}` };
+    }
+    throw error;
+  }
+
+  const paymentService = new PaymentService();
+  // WhatsApp-owner bills aren't tied to a staff User row — attribution
+  // comes from the isOwner check in the webhook, so createdBy is null.
+  const { payment, qrImageDataUrl } = await paymentService.createPayment(input, null);
+
+  const amountText = `Rs. ${formatRupees(payment.amountPaisa)}`;
+  const caption =
+    `Haidar Store — Bill ${payment.billNo}\n` +
+    `Amount: ${amountText}\n` +
+    'Is QR ko scan karen — JazzCash number aur amount nazar aayega. Apne JazzCash app se is number par payment bhejen.';
+
+  try {
+    await sendImageMessage(payment.customerPhone, qrImageDataUrl, caption);
+  } catch (error) {
+    logger.warn('QR image send failed, falling back to text', {
+      billNo: payment.billNo,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await sendTextMessage(
+      payment.customerPhone,
+      `Haidar Store — Bill ${payment.billNo}\n` +
+        `Amount: ${amountText}\n` +
+        `QR image bhejne mein masla hua — barah-e-karam JazzCash app se is number par ${amountText} bhejen: ${env.JAZZCASH_NUMBER}\n` +
+        `(Ref: ${payment.billNo})`,
+    );
+    return {
+      success: true,
+      billNo: payment.billNo,
+      amountRupees: payment.amountPaisa / 100,
+      qrSentAs: 'text-fallback',
+      message: `Bill ${payment.billNo} ban gaya (${amountText}). QR image nahi bheja ja saka, is liye payment details text message mein customer ko bhej di hain.`,
+    };
+  }
+
+  return {
+    success: true,
+    billNo: payment.billNo,
+    amountRupees: payment.amountPaisa / 100,
+    qrSentAs: 'image',
+    message: `Bill ${payment.billNo} ban gaya (${amountText}) — QR customer ko WhatsApp par bhej diya hai.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: confirm_payment
+// ---------------------------------------------------------------------------
+
+/**
+ * Why the thank-you send is best-effort: the bill is PAID the moment
+ * markPaid commits — the customer's thank-you message is a courtesy, not
+ * the transaction. If sending fails, the tool reports success with
+ * thankYouSent=false so the AI tells the owner to confirm verbally
+ * instead of pretending the message went out.
+ */
+
+export const confirmPaymentDeclaration = {
+  name: 'confirm_payment',
+  description:
+    "Mark a QR bill as PAID after the owner confirms the money arrived (owner only). Use when the owner says payment received — e.g. 'Ali ke 1500 aa gaye' or 'BILL-20261011-4821 ki payment mil gayi'. Provide EITHER the bill number OR the customer's WhatsApp number (their latest pending bill is confirmed). The customer automatically gets a thank-you message on WhatsApp in Urdu.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      billNo: {
+        type: Type.STRING,
+        description: 'Bill number, e.g. "BILL-20261011-4821". Provide this or customerPhone.',
+      },
+      customerPhone: {
+        type: Type.STRING,
+        description: "Customer's WhatsApp number (digits with country code) — their latest PENDING bill is confirmed.",
+      },
+    },
+  },
+};
+
+export async function confirmPaymentByOwner(billNo?: string, customerPhone?: string): Promise<unknown> {
+  if (!billNo && !customerPhone) {
+    return {
+      success: false,
+      message: 'Bill number ya customer ka WhatsApp number batayen taake payment confirm kar sakun.',
+    };
+  }
+
+  const paymentService = new PaymentService();
+
+  try {
+    // Peek first so the reply can honestly say "pehle se paid tha"
+    // instead of "abhi paid hua".
+    const wasAlreadyPaid = billNo ? (await paymentService.getByBillNo(billNo)).status === 'PAID' : false;
+
+    const payment = billNo
+      ? await paymentService.confirmPaymentByBillNo(billNo)
+      : await paymentService.confirmLatestPendingForPhone(customerPhone as string);
+
+    const amountText = `Rs. ${formatRupees(payment.amountPaisa)}`;
+    const thankYou =
+      `Shukriya! Aap ki payment ${amountText} kamyabi se receive ho gayi hai. – Haidar Store ✅\n` +
+      `Bill: ${payment.billNo}`;
+
+    try {
+      await sendTextMessage(payment.customerPhone, thankYou);
+    } catch (error) {
+      logger.warn('Thank-you message failed to send', {
+        billNo: payment.billNo,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        success: true,
+        billNo: payment.billNo,
+        thankYouSent: false,
+        message: `Bill ${payment.billNo} PAID mark ho gaya, lekin customer ko shukriya ka message nahi bheja ja saka — unhein zabani bata den.`,
+      };
+    }
+
+    return {
+      success: true,
+      billNo: payment.billNo,
+      amountRupees: payment.amountPaisa / 100,
+      alreadyPaid: wasAlreadyPaid,
+      thankYouSent: true,
+      message: wasAlreadyPaid
+        ? `Bill ${payment.billNo} pehle se PAID tha — customer ko dobara shukriya ka message bhej diya hai.`
+        : `Bill ${payment.billNo} (${amountText}) PAID mark ho gaya — customer ko WhatsApp par shukriya ka message bhej diya hai.`,
+    };
+  } catch (error) {
+    if (error instanceof PaymentBillNotFoundError || error instanceof NoPendingPaymentError) {
+      return {
+        success: false,
+        message: `Koi aisa pending bill nahi mila (${billNo ?? customerPhone}). Bill number ya customer ka number dubara check karen.`,
+      };
+    }
+    if (error instanceof PaymentAlreadyCancelledError) {
+      return { success: false, message: 'Ye bill CANCELLED hai — isay paid mark nahi kiya ja sakta.' };
     }
     throw error;
   }

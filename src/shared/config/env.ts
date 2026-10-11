@@ -33,17 +33,30 @@ const envSchema = z.object({
   WHATSAPP_ACCESS_TOKEN: z.string().min(1),
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
   WHATSAPP_VERIFY_TOKEN: z.string().min(1),
+  // Meta App secret (Settings > Basic) — used to verify the HMAC-SHA256
+  // signature Meta attaches to every webhook POST (X-Hub-Signature-256).
+  // Without this, anyone who guesses the webhook URL could forge
+  // messages and, by spoofing an owner number, reach owner-only tools.
+  WHATSAPP_APP_SECRET: z.string().min(1),
 
   GEMINI_API_KEY: z.string().min(1),
   /// One or more of the owner's own WhatsApp numbers, comma-separated,
   /// digits only, country code first, no '+' or spaces (exactly the
   /// format WhatsApp sends in webhook payloads — e.g.
-  /// "923012965191,923365556157"). This is the ONLY thing that
+  /// "923001234567,923007654321"). This is the ONLY thing that
   /// distinguishes "the owner is asking" from "a customer is asking" —
   /// see features/ai/conversation.ts for why that distinction is a hard,
   /// code-level check rather than something left to the AI's judgment.
   OWNER_WHATSAPP_NUMBERS: z.string().min(1),
   SHOP_ADDRESS: z.string().min(1),
+  /// The shop's own JazzCash personal account number — digits only,
+  /// country code first, no '+' or spaces (e.g. "923001234567"), the
+  /// number customers send money TO. Used ONLY by the static-QR payment
+  /// provider to build the QR payload; it is never logged and never
+  /// committed with a real value (see .env.example). When the JazzCash
+  /// Business account/API arrives, the business provider brings its own
+  /// credentials and this stays as the static-QR fallback.
+  JAZZCASH_NUMBER: z.string().min(1),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -93,9 +106,11 @@ const CLIENT_SAFE_DEFAULTS: Env = {
   WHATSAPP_ACCESS_TOKEN: '',
   WHATSAPP_PHONE_NUMBER_ID: '',
   WHATSAPP_VERIFY_TOKEN: '',
+  WHATSAPP_APP_SECRET: '',
   GEMINI_API_KEY: '',
   OWNER_WHATSAPP_NUMBERS: '',
   SHOP_ADDRESS: '',
+  JAZZCASH_NUMBER: '',
 };
 
 export const env: Env = typeof window === 'undefined' ? loadEnv() : CLIENT_SAFE_DEFAULTS;
