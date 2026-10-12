@@ -17,6 +17,8 @@ import {
   createBillQrDeclaration,
   confirmPaymentByOwner,
   confirmPaymentDeclaration,
+  getTotalAssets,
+  getTotalAssetsDeclaration,
 } from '@/features/ai/owner-tools';
 
 /**
@@ -105,6 +107,7 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
         createNewCategoryDeclaration,
         createBillQrDeclaration,
         confirmPaymentDeclaration,
+        getTotalAssetsDeclaration,
       ]
     : [searchProductsDeclaration];
   const tools = [{ functionDeclarations }];
@@ -177,6 +180,8 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
           args?.billNo as string | undefined,
           args?.customerPhone as string | undefined,
         );
+      } else if (call.name === 'get_total_assets' && isOwner) {
+        toolResult = await getTotalAssets();
       } else {
         // Either an unknown tool name, or a customer's message somehow
         // requested an owner-only tool — the tool list itself already

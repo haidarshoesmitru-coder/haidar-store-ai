@@ -12,6 +12,7 @@ import { ProductService } from '@/features/catalog/services/product.service.impl
 import { CategoryService } from '@/features/catalog/services/category.service.impl';
 import { OrderService } from '@/features/orders/services/order.service.impl';
 import { InsufficientStockError, ProductSlugAlreadyExistsError, CategoryAlreadyExistsError } from '@/features/catalog/errors';
+import { getInventoryValuation, formatRupeesPK } from '@/features/reports/services/assets.service';
 import {
   PaymentService,
   createPaymentSchema,
@@ -267,7 +268,7 @@ async function resolveCategory(categoryName: string | undefined): Promise<{
 export const createNewProductDeclaration = {
   name: 'create_new_product',
   description:
-    "Create a BRAND NEW product that doesn't exist in the catalog yet (owner only), with its first variant and initial stock. Every product needs a category — if the owner didn't mention one, or the one they mentioned doesn't match an existing category, this returns the real list of categories so you can ask the owner which one fits. Never invent or guess a category.",
+    "Create a BRAND NEW product that doesn't exist in the catalog yet (owner only), with its first variant and initial stock. Decide the category YOURSELF from the product name using everyday knowledge — do NOT ask the owner. Hints: soap/sabun → toiletries/personal care; shampoo → hair care; lotion/cream → cosmetics; toothpaste/manjan → oral care; oil/tel → hair care or grocery; shoes/joota/chappal → footwear; bag → ladies bags; jewellery/zevar → jewellery. Only ask the owner when genuinely torn between two or more existing categories. If the category you pass doesn't match anything, this returns the real category list so you can pick again.",
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -605,4 +606,51 @@ export async function confirmPaymentByOwner(billNo?: string, customerPhone?: str
     }
     throw error;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: get_total_assets
+// ---------------------------------------------------------------------------
+
+/**
+ * Why this exists: Haidar's "kul kitna maal hai / kitni Zakat deni hai"
+ * question — asked on WhatsApp while dictating stock, not just on the
+ * admin panel. The valuation is computed live by assets.service.ts (no
+ * stored totals to go stale); this tool only formats it into the
+ * owner's Roman-Urdu reply. Owner-only: the numbers are built on
+ * purchase prices, which customers must never see.
+ */
+
+export const getTotalAssetsDeclaration = {
+  name: 'get_total_assets',
+  description:
+    "Get total inventory assets value and Zakat due (owner only). Use when the owner asks 'total assets kitne hain', 'kul maal kitne ka hai', 'zakat kitni banti hai', or wants to know the shop's total stock value. No parameters.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {},
+  },
+};
+
+export async function getTotalAssets(): Promise<unknown> {
+  const valuation = await getInventoryValuation();
+
+  const topCategories = valuation.byCategory
+    .slice(0, 3)
+    .map((c) => `${c.categoryName}: ${formatRupeesPK(c.value)}`)
+    .join('\n');
+
+  const fallbackNote =
+    valuation.fallbackCount > 0
+      ? `\n(Note: ${valuation.fallbackCount} item(s) ki purchase price record nahi thi, unhein sale price par ginaya gaya hai.)`
+      : '';
+
+  return {
+    success: true,
+    message:
+      `Kul assets (stock value): ${formatRupeesPK(valuation.totalValue)}\n` +
+      `Zakat (2.5%): ${formatRupeesPK(valuation.zakat)}\n` +
+      `Kul units: ${valuation.totalUnits.toLocaleString('en-PK')}\n` +
+      (topCategories ? `\nSab se zyada value:\n${topCategories}` : '') +
+      fallbackNote,
+  };
 }

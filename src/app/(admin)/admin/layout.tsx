@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { href: '/admin/categories', label: 'Categories' },
   { href: '/admin/brands', label: 'Brands' },
   { href: '/admin/inventory', label: 'Inventory' },
+  { href: '/admin/assets', label: 'Assets & Zakat' },
   { href: '/admin/reports', label: 'Reports' },
 ];
 
