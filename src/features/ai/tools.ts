@@ -129,3 +129,28 @@ export const searchProductsDeclaration = {
     required: ['query'],
   },
 };
+
+/**
+ * Why this exists: "Stock mein kya kya hai?" — a customer browsing, not
+ * searching. Before this tool the model had nothing to answer that with
+ * and fell back to "samajh nahi aaya". Returns active category names
+ * only — no prices, no stock counts, safe for customers.
+ */
+export async function listCategories(): Promise<string[]> {
+  const categories = await db.category.findMany({
+    where: { isActive: true, deletedAt: null },
+    select: { name: true },
+    orderBy: { sortOrder: 'asc' },
+  });
+  return categories.map((c) => c.name);
+}
+
+export const listCategoriesDeclaration = {
+  name: 'list_categories',
+  description:
+    "List the shop's product categories. Use when a customer asks what the shop sells or what's available in stock (e.g. 'stock mein kya kya hai', 'aap ke paas kya kya milta hai'). Returns category names only.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {},
+  },
+};

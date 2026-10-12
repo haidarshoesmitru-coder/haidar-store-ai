@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { env } from '@/shared/config/env';
 import { logger } from '@/shared/lib/logger';
 import { buildSystemPrompt } from '@/features/ai/system-prompt';
-import { searchProducts, searchProductsDeclaration } from '@/features/ai/tools';
+import { searchProducts, searchProductsDeclaration, listCategories, listCategoriesDeclaration } from '@/features/ai/tools';
 import { loadHistory, saveExchange } from '@/features/ai/memory';
 import {
   addNewStock,
@@ -81,6 +81,86 @@ const MAX_TOOL_ROUNDS = 3;
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
+/**
+ * Why this exists: real incident (Oct 12, 2026) — "Shampoo" failed with
+ * the generic fallback while "Hi" (no tool call) worked a minute
+ * earlier, and the same query had worked the night before. The code
+ * path is identical either way, so the failure was transient on
+ * Gemini's side (429/5xx/network), not a query bug. Retrying a failed
+ * sendMessage with backoff turns those blips into invisible hiccups
+ * instead of "samajh nahi aaya" replies. 400/404 are NOT retried —
+ * those are bad requests that will fail the same way every time.
+ */
+function getErrorStatus(error: unknown): number | null {
+  if (typeof error === 'object' && error !== null) {
+    const e = error as Record<string, unknown>;
+    if (typeof e.status === 'number') return e.status;
+  }
+  const msg = error instanceof Error ? error.message : String(error);
+  const m = msg.match(/\b(400|404|429|500|502|503)\b/);
+  return m ? Number(m[1]) : null;
+}
+
+async function sendWithRetry<T>(send: () => Promise<T>, label: string): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await send();
+    } catch (error) {
+      lastError = error;
+      const status = getErrorStatus(error);
+      if (status === 400 || status === 404) throw error;
+      if (attempt < 2) {
+        logger.warn(`AI ${label} failed, retrying`, { attempt: attempt + 1, status });
+        await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Why this exists: the last line of defense. If the whole Gemini
+ * conversation throws (even after retries), a customer asking about a
+ * product should still get an answer — the database is right there.
+ * This bypasses the LLM entirely: direct category list for browsing
+ * questions, direct product search otherwise, formatted in warm Roman
+ * Urdu. Returns null when there's genuinely nothing to say, so the
+ * caller falls back to the human apology.
+ */
+async function deterministicFallback(customerMessage: string, isOwner: boolean): Promise<string | null> {
+  try {
+    const lower = customerMessage.toLowerCase();
+
+    if (isOwner && /(assets|zakat|kul maal)/.test(lower)) {
+      const res = (await getTotalAssets()) as { success?: boolean; message?: string };
+      if (res?.success && res.message) return res.message;
+      return null;
+    }
+
+    if (!isOwner && /(kya|kia)\s+(kya|kia)\s+(hai|he)|kya\s+milta|kya\s+available|stock\s+me/.test(lower)) {
+      const names = await listCategories();
+      if (names.length > 0) {
+        return (
+          `Bhai hamare paas ye sab milta hai:\n` +
+          names.map((n) => `• ${n}`).join('\n') +
+          `\nKis cheez ka pooch rahe ho?`
+        );
+      }
+      return null;
+    }
+
+    const results = await searchProducts(customerMessage, isOwner);
+    if (results.length === 0) return null;
+    const lines = results.slice(0, 5).map(
+      (r) => `• ${r.productName} — Rs. ${r.price.toLocaleString('en-PK')}${r.inStock ? '' : ' (filhal khatm)'}`,
+    );
+    return `Bhai ye mile hain:\n${lines.join('\n')}\nAur kuch chahiye tha?`;
+  } catch {
+    return null;
+  }
+}
+
 export async function getAiReply(customerMessage: string, isOwner: boolean, senderNumber: string): Promise<string> {
   try {
     return await runConversation(customerMessage, isOwner, senderNumber);
@@ -90,6 +170,8 @@ export async function getAiReply(customerMessage: string, isOwner: boolean, send
     // (model churn, a 400/404/429, a network hiccup), the customer still
     // gets a plain-language fallback instead of nothing.
     logger.error('AI conversation failed', { error: error instanceof Error ? error.stack : String(error) });
+    const direct = await deterministicFallback(customerMessage, isOwner);
+    if (direct) return direct;
     return isOwner
       ? 'AI se abhi jawab nahi mil saka (technical masla) — thodi dair mein dubara try karen.'
       : 'Sorry bhai, samajh nahi aaya — zara dobara batayen kya chahiye tha?';
@@ -109,7 +191,7 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
         confirmPaymentDeclaration,
         getTotalAssetsDeclaration,
       ]
-    : [searchProductsDeclaration];
+    : [searchProductsDeclaration, listCategoriesDeclaration];
   const tools = [{ functionDeclarations }];
 
   // v3.4 memory: replay this number's recent TEXT exchanges as the
@@ -125,7 +207,7 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
     history,
   });
 
-  let response = await chat.sendMessage({ message: customerMessage });
+  let response = await sendWithRetry(() => chat.sendMessage({ message: customerMessage }), 'initial reply');
   let finalText: string | null = null;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -135,7 +217,7 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
       break;
     }
 
-    const responseParts = [];
+    const responseParts: { functionResponse: { name: string; response: { result: unknown } } }[] = [];
     for (const call of functionCalls) {
       if (!call.name) {
         // The SDK types this as optional; in practice Gemini always
@@ -150,6 +232,9 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
 
       if (call.name === 'search_products') {
         toolResult = await searchProducts((args?.query as string) ?? '', isOwner);
+      } else if (call.name === 'list_categories') {
+        const names = await listCategories();
+        toolResult = { categories: names };
       } else if (call.name === 'add_new_stock' && isOwner) {
         toolResult = await addNewStock(
           (args?.productName as string) ?? '',
@@ -194,7 +279,7 @@ async function runConversation(customerMessage: string, isOwner: boolean, sender
       responseParts.push({ functionResponse: { name: call.name, response: { result: toolResult } } });
     }
 
-    response = await chat.sendMessage({ message: responseParts });
+    response = await sendWithRetry(() => chat.sendMessage({ message: responseParts }), 'tool follow-up');
   }
 
   if (finalText === null) {
