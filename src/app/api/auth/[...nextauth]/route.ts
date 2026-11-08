@@ -22,11 +22,22 @@ import { isLoginRateLimited } from '@/server/auth/rate-limit';
  */
 const nextAuthHandler = NextAuth(authConfig);
 
-export function GET(req: NextRequest) {
-  return nextAuthHandler(req);
+/**
+ * NextAuth (v4, App Router) works out which action is being requested
+ * (signin / callback / session / signout) from `ctx.params.nextauth` —
+ * the catch-all segment in this file's path. Both handlers below MUST
+ * forward the Next.js-provided context to it; calling `nextAuthHandler(req)`
+ * with the request alone leaves NextAuth unable to tell what to do.
+ */
+interface RouteContext {
+  params: { nextauth: string[] };
 }
 
-export async function POST(req: NextRequest) {
+export function GET(req: NextRequest, ctx: RouteContext) {
+  return nextAuthHandler(req, ctx);
+}
+
+export async function POST(req: NextRequest, ctx: RouteContext) {
   // Only the credentials sign-in callback needs brute-force protection.
   if (req.nextUrl.pathname.includes('/callback/credentials')) {
     const forwarded = req.headers.get('x-forwarded-for');
@@ -44,5 +55,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return nextAuthHandler(req);
+  return nextAuthHandler(req, ctx);
 }
